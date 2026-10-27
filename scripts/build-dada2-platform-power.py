@@ -41,7 +41,7 @@ header += '};\nstatic_assert(sizeof(ApplePMGR)==0x4b8a8,"Original provider stora
 
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
 device = next(iter((ROOT / 'drivers').glob('Dada*'))).resolve().parents[1]
-source = device / 'drivers/DadaPlatformPower22/ShengPlatformPower.cpp'
+source = device / 'drivers/DadaPlatformPower2/ShengPlatformPower.cpp'
 obj = OUT / 'ShengPlatformPower.o'
 command, index = [], 0
 arguments = record['arguments']

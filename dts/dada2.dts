@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 //
-// Xiaomi 15 (dada) hardware description for the common ADT generator.
+// Redmi K80 Pro (dada2) hardware description for the common ADT generator.
 // The SoC DTSI owns CPU topology, GIC and controller registers; this board
-// adds its memory, reservations, timer rate and ADT exports.
+// adds its memory, reservations and ADT exports.
 /dts-v1/;
 
 /include/ "sm8750.dtsi"
@@ -36,20 +36,12 @@
     timebase-frequency = <19200000>;
 };
 
-&{/timer} {
-    interrupt-parent = <&intc>;
-};
-
-&intc {
+&gic {
     /* Distributor + one 2 MiB redistributor region: 8 cores at a 0x40000 stride. */
     reg = <0x0 0x16000000 0x0 0x10000>, <0x0 0x16080000 0x0 0x200000>;
     redistributor-stride = <0x40000>;
-    unixnu,adt-name = "intc";
 };
 
-&{/soc} {
-    ufs@1d84000 {
-        status = "okay";
-        unixnu,adt-name = "ufshc";
-    };
+&ufs {
+    status = "okay";
 };

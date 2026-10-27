@@ -5,7 +5,7 @@ The firmware step runs this before EDK II builds. It checks that the values this
 match the Mu-Silicium checkout, and it reports the device values that are still placeholders.
 
 Hard errors (the build stops):
-  - the UEFI FD descriptor in MemoryMapLib.c does not match Resources/Configs/dada.toml
+  - the UEFI FD descriptor in MemoryMapLib.c does not match Resources/Configs/dada2.toml
   - the CPU stack descriptor does not match PcdCPUCoresStackBase in dada.dsc
   - a memory descriptor is not 4 KiB aligned, or two descriptors overlap
   - a Binaries/dada path named by Include/*.inc is missing
@@ -31,11 +31,11 @@ import tomllib
 
 DESCRIPTOR = re.compile(r'\{"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+),([^}]+)\}')
 UFS_WINDOW = (0x01D80000, 0x00028000)   # ufsphy_mem@1d80000 .. 0x1da8000 (ufshc, ICE, MCQ)
-PLATFORM = Path('Platforms/Xiaomi/dadaPkg')
+PLATFORM = Path('Platforms/Xiaomi/dada2Pkg')
 
 
 def is_uefi(path):
-    return (Path(path) / PLATFORM / 'dada.dsc').is_file()
+    return (Path(path) / PLATFORM / 'dada2.dsc').is_file()
 
 
 def find_uefi(given):
@@ -88,7 +88,7 @@ def main():
 
     uefi = find_uefi(args.uefi)
     package = uefi / PLATFORM
-    config = tomllib.loads((uefi / 'Resources/Configs/dada.toml').read_text())
+    config = tomllib.loads((uefi / 'Resources/Configs/dada2.toml').read_text())
     source = (package / 'Library/MemoryMapLib/MemoryMapLib.c').read_text()
     rows = [(match[1], int(match[2], 16), int(match[3], 16), match[4]) for match in DESCRIPTOR.finditer(source)]
     by_name = {normalize(name): (name, base, size, attrs) for name, base, size, attrs in rows}
@@ -112,19 +112,19 @@ def main():
         errors.append('MemoryMapLib.c: no UEFI FD descriptor')
     elif (fd_row[1], fd_row[2]) != (fd['base'], fd['size']):
         errors.append(f'MemoryMapLib.c: UEFI FD is {fd_row[1]:#x}+{fd_row[2]:#x}, '
-                      f'Resources/Configs/dada.toml says {fd["base"]:#x}+{fd["size"]:#x}')
+                      f'Resources/Configs/dada2.toml says {fd["base"]:#x}+{fd["size"]:#x}')
     if fd['size'] // 0x1000 <= 0:
-        errors.append('Resources/Configs/dada.toml: FD size is smaller than one block')
+        errors.append('Resources/Configs/dada2.toml: FD size is smaller than one block')
 
-    dsc = (package / 'dada.dsc').read_text()
+    dsc = (package / 'dada2.dsc').read_text()
     stack = re.search(r'PcdCPUCoresStackBase\|(0x[0-9a-fA-F]+)', dsc)
     stack_row = by_name.get('uefistack')
     if not stack:
-        errors.append('dada.dsc: no PcdCPUCoresStackBase')
+        errors.append('dada2.dsc: no PcdCPUCoresStackBase')
     elif not stack_row:
         errors.append('MemoryMapLib.c: no UEFI stack descriptor')
     elif stack_row[1] != int(stack[1], 16):
-        errors.append(f'MemoryMapLib.c: UEFI stack is {stack_row[1]:#x}, dada.dsc says {int(stack[1], 16):#x}')
+        errors.append(f'MemoryMapLib.c: UEFI stack is {stack_row[1]:#x}, dada2.dsc says {int(stack[1], 16):#x}')
 
     dependencies = set()
     for inc in (package / 'Include').glob('*.inc'):
@@ -133,13 +133,13 @@ def main():
     for path in missing:
         errors.append(f'vendor input missing: {path}')
 
-    dtb = uefi / 'Resources/DTBs/dada.dtb'
+    dtb = uefi / 'Resources/DTBs/dada2.dtb'
     if not dtb.is_file():
         blob = sorted((package / 'FdtBlob').glob('*.dtb'))
         if blob:
-            warnings.append(f'Resources/DTBs/dada.dtb is missing; bootimg needs it (FdtBlob has {blob[0].name})')
+            warnings.append(f'Resources/DTBs/dada2.dtb is missing; bootimg needs it (FdtBlob has {blob[0].name})')
         else:
-            errors.append('no dada device tree: Resources/DTBs/dada.dtb and Platforms/Xiaomi/dadaPkg/FdtBlob/*.dtb are both missing')
+            errors.append('no dada2 device tree: Resources/DTBs/dada2.dtb and Platforms/Xiaomi/dada2Pkg/FdtBlob/*.dtb are both missing')
 
     # DadaUfs2 hardcodes the controller's compatible names and the SM8750 GCC offsets. Check both
     # against the tree the kernel will actually boot from: a device tree that renames the controller
@@ -161,10 +161,10 @@ def main():
     if device:
         board = tomllib.loads((device / 'board.toml').read_text())
         firmware = board.get('firmware', {})
-        if firmware.get('config') != 'dada':
+        if firmware.get('config') not in ('dada', 'dada2'):
             errors.append(f"board.toml: [firmware] config is {firmware.get('config')!r}, expected 'dada'")
-        if firmware.get('dsc') != 'Platforms/Xiaomi/dadaPkg/dada.dsc':
-            errors.append(f"board.toml: [firmware] dsc is {firmware.get('dsc')!r}, expected Platforms/Xiaomi/dadaPkg/dada.dsc")
+        if firmware.get('dsc') != 'Platforms/Xiaomi/dada2Pkg/dada2.dsc':
+            errors.append(f"board.toml: [firmware] dsc is {firmware.get('dsc')!r}, expected Platforms/Xiaomi/dada2Pkg/dada2.dsc")
         if not (uefi / str(firmware.get('dsc', ''))).is_file():
             errors.append(f"board.toml: [firmware] dsc does not exist in {uefi}")
         userdata = board.get('userdata', {})

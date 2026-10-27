@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the dada UFS diagnostic log writer (package/BootLog.c) against this kernel's own compile record."""
+"""Build the dada UFS diagnostic log writer (kits/dada2/BootLog.c) against this kernel's own compile record."""
 import json
 from pathlib import Path
 import subprocess
@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/dada-boot-log'
 OUT.mkdir(parents=True, exist_ok=True)
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json').read_text().strip().rstrip(','))
-source = ROOT / 'kits/dada/BootLog.c'
+source = ROOT / 'kits/dada2/BootLog.c'
 obj = OUT / 'BootLog.o'
 command = []
 args = record['arguments']
@@ -32,7 +32,7 @@ command += ['-mgeneral-regs-only', '-I', str(ROOT / '.cache/xnu-work/osfmk')]
 result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True, timeout=120)
 if result.returncode:
     raise SystemExit(result.stdout[-4000:] + result.stderr[-4000:])
-proc_source = ROOT / 'kits/dada/BootProcessProbe.c'
+proc_source = ROOT / 'kits/dada2/BootProcessProbe.c'
 proc_obj = OUT / 'BootProcessProbe.o'
 proc_command = [str(proc_source) if arg == str(source) else str(proc_obj) if arg == str(obj) else arg for arg in command]
 result = subprocess.run(proc_command, cwd=record['directory'], capture_output=True, text=True, timeout=120)

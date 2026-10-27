@@ -86,7 +86,7 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
  proc_handle_critical_exit(proc_t p, int rv)
  {
  	if (!proc_should_trigger_panic(p, rv)) {
-@@ -1860,15 +1861,16 @@
+@@ -1865,17 +1866,18 @@
  		} else if (initproc_spawned) {
  			prefix_str = "initproc exited";
  		} else {
@@ -104,4 +104,6 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
  	} else {
  		/* For processes that aren't launchd, just use the process name and pid */
  		snprintf(prefix_str_buf, sizeof(prefix_str_buf), "%s[%d] exited", p->p_name, proc_getpid(p));
+ 		boot_progress_critical_exit(proc_getpid(p), prefix_str_buf, sizeof(prefix_str_buf));
  		prefix_str = prefix_str_buf;
+ 	}

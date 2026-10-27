@@ -66,15 +66,18 @@ def _blob_from_api(url, sha):
 def fetch(url, sha=None):
     if urllib.parse.urlsplit(url).hostname != 'raw.githubusercontent.com':
         return _read(url)
-    for candidate in [url] + [mirror + url for mirror in RAW_MIRRORS]:
+    # Blob API first: on networks where raw.githubusercontent.com is silently
+    # dropped (SYN never answered), trying raw first burns 30 s per header.
+    # Mirrors remain the fallback for when the blob API is rate-limited.
+    data = _blob_from_api(url, sha)
+    if data is not None:
+        return data
+    for candidate in [mirror + url for mirror in RAW_MIRRORS]:
         try:
             return _read(candidate)
         except Exception:
             continue
-    data = _blob_from_api(url, sha)
-    if data is None:
-        raise RuntimeError(f'cannot fetch {url}')
-    return data
+    raise RuntimeError(f'cannot fetch {url}')
 
 
 def restore(entry, destination=DESTINATION, tag=TAG):

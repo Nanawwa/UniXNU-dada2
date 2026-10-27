@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/boot-progress'
 OUT.mkdir(parents=True, exist_ok=True)
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json').read_text().strip().rstrip(','))
-source = ROOT / 'kits/dada/BootProgress.c'
+source = ROOT / 'kits/dada2/BootProgress.c'
 obj = OUT / 'BootProgress.o'
 command = []
 args = record['arguments']
@@ -41,11 +41,11 @@ result = subprocess.run(command, cwd=record['directory'], capture_output=True, t
 if result.returncode:
     raise SystemExit(result.stdout[-4000:] + result.stderr[-4000:])
 (OUT / 'compile-command.json').write_text(json.dumps(command,indent=2)+'\n')
-fault_source = ROOT / 'kits/dada/BootFaultProbe.c'
+fault_source = ROOT / 'kits/dada2/BootFaultProbe.c'
 fault_obj = OUT / 'BootFaultProbe.o'
 fault_command = [str(fault_source) if arg == str(source) else str(fault_obj) if arg == str(obj) else arg for arg in command]
 subprocess.run(fault_command, cwd=record['directory'], check=True, timeout=90)
-policy_source = ROOT / 'kits/dada/BootWatchdogPolicy.c'
+policy_source = ROOT / 'kits/dada2/BootWatchdogPolicy.c'
 policy_obj = OUT / 'BootWatchdogPolicy.o'
 policy_record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/kern_exec.o.json').read_text().strip().rstrip(','))
 policy_command = []
@@ -66,17 +66,17 @@ while j < len(policy_args):
 policy_command += ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror']
 subprocess.run(policy_command, cwd=policy_record['directory'], check=True, timeout=90)
 # The diagnostic file export (BootLog.c's sheng-diag-export) reads files through the VFS: the same BSD-side flags.
-diag_source = ROOT / 'kits/dada/BootDiagExport.c'
+diag_source = ROOT / 'kits/dada2/BootDiagExport.c'
 diag_obj = OUT / 'BootDiagExport.o'
 diag_command = [str(diag_source) if arg == str(policy_source) else str(diag_obj) if arg == str(policy_obj) else arg for arg in policy_command]
 subprocess.run(diag_command, cwd=policy_record['directory'], check=True, timeout=90)
 # The firmware file reader of the audio DSP bring-up (AdspProbe.cpp) uses the VFS too.
-fw_source = ROOT / 'kits/dada/AdspFirmware.c'
+fw_source = ROOT / 'kits/dada2/AdspFirmware.c'
 fw_obj = OUT / 'AdspFirmware.o'
 fw_command = [str(fw_source) if arg == str(policy_source) else str(fw_obj) if arg == str(policy_obj) else arg for arg in policy_command]
 subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=90)
 
-stub_source = ROOT / 'kits/dada/BootProgressStubs.c'
+stub_source = ROOT / 'kits/dada2/BootProgressStubs.c'
 stub_obj = OUT / 'BootProgressStubs.o'
 stub_command = [str(stub_source) if arg == str(source) else str(stub_obj) if arg == str(obj) else arg for arg in command]
 subprocess.run(stub_command, cwd=record['directory'], check=True, timeout=90)

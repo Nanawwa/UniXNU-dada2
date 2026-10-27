@@ -20,7 +20,7 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
  	if (!proc_should_trigger_panic(p, rv)) {
  		// No panic, bail out
  		return;
-@@ -1852,12 +1858,18 @@
+@@ -1851,12 +1857,18 @@
  			prefix_str = "LTE preinit process exited";
  		} else if (initproc_spawned) {
  			prefix_str = "initproc exited";
@@ -36,6 +36,6 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
  	} else {
  		/* For processes that aren't launchd, just use the process name and pid */
  		snprintf(prefix_str_buf, sizeof(prefix_str_buf), "%s[%d] exited", p->p_name, proc_getpid(p));
+ 		boot_progress_critical_exit(proc_getpid(p), prefix_str_buf, sizeof(prefix_str_buf));
  		prefix_str = prefix_str_buf;
  	}
- 

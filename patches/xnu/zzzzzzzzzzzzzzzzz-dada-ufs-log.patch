@@ -18,10 +18,11 @@ index 8bba078..c2796c9 100644
  }
  
  static const char * init_programs[] = {
-@@ -7141,6 +7148,30 @@ static const char * init_programs[] = {
+@@ -8279,5 +8280,29 @@
  void
  load_init_program(proc_t p)
  {
+ 	boot_progress_stage("load_init_program enter");
 +	{
 +		extern void dada_log_flush(const char *);
 +		extern int native_ufs_log_open(uint64_t *, uint64_t *, const char **);
@@ -47,8 +48,6 @@ index 8bba078..c2796c9 100644
 +		dada_log_flush("exec-enter");
 +	}
  	uint32_t i;
- 	int error;
- 	vm_map_t map = current_map();
 diff --git a/osfmk/kern/printf.c b/osfmk/kern/printf.c
 index aeac9d3..a7d08ff 100644
 --- a/osfmk/kern/printf.c
