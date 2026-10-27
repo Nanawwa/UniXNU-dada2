@@ -1,4 +1,3 @@
-zzz-boot-progress-min.patch
 native-smp-secondary.patch
 zzzz-dada-skip-entitlement-acceleration-without-amfi.patch
 zzzz-dada-skip-root-auth-gate-without-owner-audit.patch
