@@ -4,13 +4,16 @@
 # from the sheng reference and drops every module that is board specific to SM8550 or not yet written
 # for SM8750 (Adreno 830, ShenG PMGR, the owner/root paths).
 
+# Board archives are built and force-loaded into the kernel link; without this the kernel step stops after
+# the XNU pass and never produces a linkable image. See [kernel] archives in board.toml.
+CONFIG_XNU_BUILD_ARCHIVES=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_SOURCE_PTHREAD=y
 CONFIG_XNU_ARM_DT_PLATFORM=y
 CONFIG_XNU_ARMCPU=y
 # The storage transport is on, with its block-device half.
 #
-# The NativeUfs in this tree is the sheng (SM8550) driver. What SM8750 needs of it is done: the
+# The DadaUfs transport in this tree is the board fork of the sheng (SM8550) driver, reduced to What SM8750 needs of it is done: the
 # compatible match covers "qcom,ufshc" (the stock dada tree) as well as the SoC-qualified names, and
 # the nine GCC clock offsets are the SM8750 ones (docs/ufs-sm8750.md has the table and its source),
 # and reading a full GPT through the adopted controller works (native-ufs-probe=9).
@@ -30,7 +33,9 @@ CONFIG_XNU_ARMCPU=y
 # IOBlockStorageDevice imports to the addresses the prelinked kext itself uses. Exactly one class of
 # that name exists at run time, so OSMetaClass has nothing to refuse.
 CONFIG_XNU_NATIVE_UFS=y
-CONFIG_XNU_NATIVE_UFS_PROBE_ONLY=n
+# The board's own transport archive; build-xnu-4k-baseline.sh honours this override instead of the
+# upstream ShengUfs path its default names.
+CONFIG_XNU_NATIVE_UFS_ARCHIVE="{tree}/build/dada-ufs/libDadaUfs.a"
 CONFIG_XNU_NATIVE_AES=y
 # The trust cache runtime is off. The port patch native-trust-cache-runtime.patch compiles
 # trust_cache_runtime_init() into the boot only when XNU_NATIVE_TRUST_CACHE is 1, and that function
@@ -38,7 +43,7 @@ CONFIG_XNU_NATIVE_AES=y
 # its interface. This board prelinks no AMFI (see board.toml [kernel.prelink] roots: the AMFI path is
 # the owner-root path, which needs storage first), so the runtime is left out; the static trust cache
 # is not loaded either, which is no loss: the ADT carries an empty TrustCache node anyway.
-CONFIG_XNU_TRUST_CACHE_RUNTIME=n
+CONFIG_XNU_TRUST_CACHE_RUNTIME=y
 CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
 CONFIG_XNU_NATIVE_ARCH_TIMER=y
 CONFIG_XNU_NATIVE_PAN=y
@@ -57,6 +62,21 @@ CONFIG_XNU_BOOT_PROGRESS=n
 # reference port does too).
 CONFIG_XNU_DT_PANIC_REGION=y
 
+# Offline owner cache mount: mount the SystemOS cryptex volume and point launchd's dyld at its shared
+# cache. This is the bring-up substitution for the AMFI-gated cryptex mount; the transport reports the
+# volume as authorized (no signature policy). The UUID is the SystemOS APFS volume UUID of 21H461.
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+CONFIG_XNU_DADA_BOOT_LOG=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="BA3B9FFA-0E35-4DE1-B942-E291D7BD5B52"
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="8846FE78-2910-4297-AF97-D59BB6F8FC16"
+# Union composition: mount the SystemOS cryptex over / so dyld's first search path
+# (/System/Library/Caches/com.apple.dyld) resolves without environment variables.
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 
 # Explicitly off for the first boot:
@@ -72,7 +92,7 @@ CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 #                              through that. Turn it on again with a trimmed, board-neutral builder when a
 #                              framebuffer service (not a text console) is wanted.
 CONFIG_XNU_NATIVE_ADRENO=n
-CONFIG_XNU_SHENG_PMGR=n
+CONFIG_XNU_SHENG_PMGR=y
 CONFIG_XNU_NATIVE_MOBILE_DISPLAY=n
 CONFIG_XNU_ARMVIRT_PLATFORM=n
 CONFIG_XNU_SOURCE_MOCKFS=n

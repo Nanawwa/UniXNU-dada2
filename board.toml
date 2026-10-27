@@ -1,49 +1,36 @@
-# Board description of the Xiaomi 15 (dada, Qualcomm SM8750 "sun"), read by the unixnu build driver.
+# Board description of the Xiaomi 15 (dada, Qualcomm SM8750 "sun").
 #
-# Every value below is either taken from the Mu-Silicium dada port (Resources/Configs/dada.toml,
-# Platforms/Xiaomi/dadaPkg, the stock device tree in Resources/DTBs/dada.dtb) or marked TODO.
-# A TODO value is a first-boot placeholder: the stages that depend on it are listed in
-# docs/known-values.md and are refused or warned about by scripts/check-dada.py.
+# Format 2: shared SM8750 resources come from UniXNU-sm8750-common, the target
+# OS identity from the selected OS profile, and this file keeps the board's own
+# wiring, firmware selection, partition geometry and payload policy.
+# docs/known-values.md records every pinned address and its source.
+schema_version = 2
 
 [board]
 name = "dada"
 soc = "SM8750"
+soc_source = "sm8750"
+os_profile = "ipados-17.7.11-21H461"
 description = "Xiaomi 15"
-kit = "dada"                       # the package/ of this repository appears as kits/dada in the build tree
+kit = "dada"
+example = false
 
-# The target OS image: the unchanged iPad7,1 iPadOS 17.7.11 restore image that the UniXNU kernel build
-# and prelink are pinned to (the same image as the sheng reference port). Give --ipsw PATH to use a local
-# file; without it the remote url is read with range requests, only the members that are needed.
-[ipsw]
-url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
-product = "iPad7,1"
-version = "17.7.11"
-build = "21H461"
-device_class = "j120ap"
-chip_id = 0x8011
-board_id = 12
-fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
-
-# Member pins of that restore image.
-[ipsw.sha256]
-"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
-"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+[components]
+# The components this board's kernel builds today. VirtioMmioBlock arrives as
+# DadaUfs's dependency. Further checkouts under drivers/ and kits/
+# (GopFramebuffer, AppleKeyStoreState, QcomGeniSpi, RamBlock,
+# VirtioMmioConsole) are generic components kept for later subsystems; the
+# sheng-only GPU and touch checkouts were removed with the board fork.
+# porting.toml records each area.
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "DadaUfs", "RamBlock", "XnuPrelink", "DarwinBoot"]
 
 [userdata]
-# The raw image for the root partition: the OS and SystemOS disk images of the IPSW behind a manifest.
-#
-# This is the sheng root model, unchanged: 0x000000 is a 4096-byte SHNGROOT manifest, then each window is
-# one attached dmg copied byte for byte (drivers/NativeUfs/RootLayout.h reads it back). The difference from
-# sheng is only where the image lives: sheng puts it in "userdata" and gives up the rest of that partition,
-# while this port has a partition of its own, "linux", so the root image never shares space with anything
-# the phone flashes or formats.
-#
-# first_lba/last_lba are the GPT entry "linux" of LUN 0 as measured on the phone. /sys/class/block/sda36
-# reports start=808593408, size=195313664 in 512-byte sectors, and this table is in 4096-byte LBAs:
-# 808593408 * 512 / 4096 = 101074176, and the last byte of the partition is LBA 125488383.
-partition = "linux"
-first_lba = 101074176              # 0x06064500
-last_lba = 125488383               # 0x077ACCFF
+# GPT entry "linux" on LUN 0. /sys/class/block/sda36 reports start=808593408 and
+# size=195313664 in 512-byte sectors; this table uses 4096-byte LBAs, so
+# 808593408 * 512 / 4096 = 101074176 and the last byte falls in LBA 125488383.
+# The partition carries the SHNGROOT manifest and the OS/SystemOS windows.
+first_lba = 101074176
+last_lba = 125488383
 lba_bytes = 4096
 windows = [
   { name = "OS", component = "OS" },
@@ -52,58 +39,35 @@ windows = [
 
 [kernel]
 defconfig = "dada_defconfig"
-# Archive builders of the kernel step, in order. Each entry is a script of the build tree with its
-# arguments; scripts/build-xnu-4k-baseline.sh then links the archives with -Wl,-force_load and fails if
-# one is missing. Only the builders the defconfig selects are listed.
-#
-# Not listed, and why:
-#   build-arm-driver.py NativeVirtioBlock / NativeRamBlock
-#   build-native-virtio-bindings.py ...      CONFIG_XNU_NATIVE_VIRTIO_BLOCK is off (no virtio on this board)
-#   build-mockfs-fixture.py                  CONFIG_XNU_SOURCE_MOCKFS is off (test fixture)
-#   build-sheng-platform-power.py            CONFIG_XNU_SHENG_PMGR is off (SM8550 board code)
-#   build-boot-progress.py                   CONFIG_XNU_BOOT_PROGRESS is off (needs the audited owner-root set)
-#   build-arm-driver.py NativeAdreno          no Adreno 830 driver exists
-#   build-native-adreno-kits.py, build-native-adreno-accelerator.py   same
-#   build-native-legacy-display.py           CONFIG_XNU_NATIVE_LEGACY_DISPLAY is off; see below
-#   build-arm-driver.py NativeUfs             listed below, in probe-only mode
-#   build-storage-classes.py                  the IOBlockStorageDevice base class only exists to give
-#                                             that transport a base; the probe-only transport has no
-#                                             block-device half, so the class is not built in and the
-#                                             kernelcache's own com.apple.iokit.IOStorageFamily kext
-#                                             keeps the name to itself (see the defconfig)
-#
-# The console does not need the legacy display instrument: DarwinBoot fills boot_args.Video[6] from the
-# UEFI GOP (drivers/DarwinBoot BootVideo.h, base/display/rowBytes/width/height/depth) and XNU's own
-# pexpert video console draws through it. That builder is an instrument for the original
-# IOMobileFramebufferLegacy lifecycle and it compiles kits/sheng sources (touch, keystore, GPU power,
-# Novatek, cpufreq) that are SM8550 board code. Add it back with a trimmed, board-neutral copy when a
-# framebuffer service (not a text console) is wanted.
+config_fragments = ["arch:configs/common.config", "soc:configs/sm8750.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# Ordered archive plan. The storage transport needs the pinned
+# IOBlockStorageDevice reference object (build-storage-classes.py) and then the
+# kext-binding pass (build-storage-kext-bindings.py) that rebinds its base-class
+# imports to the prelinked com.apple.iokit.IOStorageFamily addresses. Compiling
+# that base class into the kernel instead registers a duplicate OSMetaClass.
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
-  "build-arm-driver.py ArmDTPlatform",
-  "build-arm-driver.py ArmCpu",
-  "build-arm-driver.py NativeAES",
-  "build-native-aes-bindings.py",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
   "build-libpthread-kernel.py",
-  # The transport derives from IOBlockStorageDevice, which the kernelcache already carries as
-  # com.apple.iokit.IOStorageFamily. build-storage-classes.py compiles the pinned reference object
-  # (the 190-slot dispatch shape), never a linked base class; build-storage-kext-bindings.py reads
-  # that shape and the kernelcache, and rebinds the transport's imports to the kext's own addresses.
-  # Linking a compiled base class instead would register a duplicate class and panic.
   "build-storage-classes.py",
-  "build-arm-driver.py NativeUfs",
-  "build-storage-kext-bindings.py --component NativeUfs",
+  "component:DadaUfs",
+"build-dada-platform-power.py",
+  "build-storage-kext-bindings.py --component DadaUfs",
+  "build-dada-ram-block.py",
+  "build-dada-boot-log.py",
 ]
 
 [kernel.prelink]
-tool = "kits/NativePrelink/emit_prelink.py"
-kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
-kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
-slide = "-0x1000000"
-# No early_security_init on this board: it runs the original AppleMobileFileIntegrity initializer, and
-# AMFI is not prelinked here (see roots). The kernel only calls an early security initializer when the
-# prelink metadata names one, so dropping the entry is enough to keep that path off.
+# tool, kernel, kernelcache_sha256 and slide come from the OS profile. This
+# board prelinks no AMFI (and nothing that depends on it), so it also clears the
+# inherited early security initializer: see docs/known-values.md, "Why AMFI is
+# not prelinked".
+early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
 roots = [
   "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
   "com.apple.driver.AppleARMPlatform",
@@ -112,16 +76,8 @@ roots = [
   "com.apple.driver.AppleEffaceableStorage",
   "com.apple.driver.AppleIISController",
   "com.apple.driver.AppleM2ScalerCSCDriver",
-  # com.apple.driver.AppleMobileFileIntegrity (AMFI) is NOT prelinked on this board, and neither is
-  # anything that depends on it. Two panics come from this:
-  #   with AMFI prelinked, AMFI itself panics with "AMFI: No PMGR" (ConfigurationSettings.cpp:235)
-  #     when no PMGR has published its nub -- nothing here publishes one, because the PMGR path is the
-  #     owner-root path, and owner-root is out of scope for this port;
-  #   without AMFI, the kernel's trust cache runtime panics with "amfi interface not available"
-  #     (bsd/kern/kern_trustcache.c), so that runtime is compiled out (XNU_TRUST_CACHE_RUNTIME=n in
-  #     the defconfig).
-  # AMFI's OSBundleLibraries dependency on com.apple.driver.ApplePMGR is not needed either: with AMFI
-  # gone, nothing pulls the PMGR in.
+  "com.apple.driver.AppleMobileFileIntegrity",
+  "com.apple.driver.ApplePMGR",
   "com.apple.driver.IODARTFamily",
   "com.apple.filesystems.apfs",
   "com.apple.iokit.CoreAnalyticsFamily",
@@ -139,22 +95,28 @@ roots = [
   "com.apple.kext.AppleMatch",
   "com.apple.kext.CoreTrust",
   "com.apple.security.AppleImage4",
+  "com.apple.security.sandbox",
 ]
 
+[device_tree]
+source = "device:dts/dada.dts"
+include_dirs = ["soc:dts"]
+
 [firmware]
-config = "dada"                    # Resources/Configs/dada.toml in the Mu-Silicium checkout (--uefi)
+config = "dada"
 dsc = "Platforms/Xiaomi/dadaPkg/dada.dsc"
 fd = "Build/dadaPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
 preflight = ["scripts/check-dada.py"]
-# The vendor binaries (Binaries/Device-Binaries, branch dada) and the trees the DSC needs.
+# The vendor binaries (Binaries/Device-Binaries, branch dada) and the trees the
+# DSC needs.
 submodules = [
   "Binaries",
   "Common/Mu",
   "Common/Mu_OEM_Sample",
   "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl",
 ]
-# The Mu_Basecore patch series that Mu-Silicium's own build_uefi.py applies to every platform.
-# UniXNU applies and reverts them around the EDK II build.
+# The Mu_Basecore patch series that Mu-Silicium's build_uefi.py applies to every
+# platform. UniXNU applies and reverts them around the EDK II build.
 patches = [
   "Resources/MuPatches/AsmMacroLib.patch",
   "Resources/MuPatches/Auth-Service.patch",
@@ -175,96 +137,73 @@ packages = [
 ]
 
 [firmware.defines]
-# Mu-Silicium builds dada without secure boot unless -s is given (build_uefi.py default).
 ENABLE_SECUREBOOT = "0"
 DEVICE_MODEL = "0"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
 BUILDID_STRING = "dada-research"
 
-# The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and
-# the optional trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
 [payload]
 volume = "DADAESP"
 size_mib = 192
 loader = "firmware"
 title = "dada first boot: source 4K XNU to console"
-# DRAM as reported to XNU (one contiguous dram-base/dram-size pair in the ADT; DRAM_BASE in
-# scripts/make-dada-adt.py is 0x80000000). Measured from the stock device tree memory node (dada.dtb):
-# 15.12 GiB of usable DRAM in 16 regions -- 8 GiB at 0xa00000000, 5 GiB at 0x8c0000000, and ~1.3 GiB
-# scattered below 0xd8000000 with the gunyah hypervisor owning 0x80000000..0x81200000. The ADT cannot
-# express that fragmentation, so 2 GiB from 0x80000000 stays the conservative first-boot value, the
-# same as sheng. Raise it once XNU is observed running on the phone.
+# One contiguous dram-base/dram-size pair: the stock tree reports 15.12 GiB in
+# 16 regions, which the ADT cannot express, so 2 GiB from 0x80000000 stays the
+# conservative first-boot value.
 dram_size = "0x80000000"
-panic_screen = true                # patch panic() screen output into the payload copy of the kernel
-# TODO(device): the accepted trust caches are device inputs. Fill this list with the hashes of the
-#   bundles this board accepts once trust caches have been extracted from the device firmware.
-trust_cache_sha256 = []
+panic_screen = false
 kernel_args = [
   "-v",
   "debug=0x14e",
   "boot-progress=2",
   "armcpu-diagnostics=1",
-  # Probe stage 7 (previous boot) dumped the real apps_smmu: scr0=0x002c0406,
-  # idr0=4c017e7f (127 groups, S1 stage-1), idr1=60000053 (83 banks, 128 pages),
-  # stream 0x60 already mapped by firmware to SMR[1]/S2CR[1]=00000001 (TYPE0, bank 1).
-  # Geometry check passed; the SMMU take-over was relaxed to reuse that existing mapping.
-  # Level 3 now: adopt the controller, program the SMMU bypass (stream 0x60 -> bank 1),
-  # replace the request list at utrlba=d4bf7000 and ring the doorbell. Nothing is written
-  # to the storage.
-  #
-  # Stage 9 (the previous boot) read the whole GPT through that adopted controller, so the
-  # transport path is proven. The root is now the sheng model: the "linux" partition carries a
-  # SHNGROOT manifest and the IPSW's two disk images, NativeUfs publishes them as two read-only
-  # windows, and the kernel picks the root volume by UUID. There is no owner-signed policy in this
-  # build, so startRoot() publishes on window readiness alone -- see the validate()/wait() branches
-  # in drivers/NativeUfs/NativeUfs.cpp.
   "native-ufs-root=1",
   "native-ufs-diagnostics=1",
   "-no_slto_panic",
+  "sheng-pmgr=2",
+  "dada-log=1",
+  "sheng-data-persist=2",
+  "-apfs_shared_datavolume",
+  "panic_on_crash_disabled=1",
   "ml-timeout-lock-panic-scale=40",
 ]
 
 [payload.adt]
-tool = "scripts/make-dada-adt.py"
-# A software identity seed for IOPlatformUUID, not an Apple chip id. Distinct from the sheng port so
-# the two boards do not produce the same identity; any nonzero 32-bit value works.
+# A software identity seed for IOPlatformUUID, not an Apple chip id. The
+# platform seed itself is not stored in any repository.
 chip_id = "208"
-# TODO(device): the DarwinBoot contiguous window request. This is the request the ADT puts into
-#   /chosen/darwinboot-memory-size, and DarwinBoot allocates it as ONE conventional-memory run of
-#   that size (drivers/DarwinBoot .../DarwinBoot.c:390 AllocateWindow). If the firmware's memory map
-#   has no run that large, the loader has no window at all and the boot stops with "NO WINDOW".
-#   256 MiB is the size that was measured to work on this phone (the run the loader picked was at
-#   physical 0xbc007c000); 1 GiB was never observed to be allocatable, so it is not asked for yet.
-#   Raise this only together with a measured conventional run of that size.
+# The DarwinBoot contiguous window request: 256 MiB was measured to allocate on
+# this phone; 1 GiB was never observed to be allocatable.
 owned_memory_size = "0x10000000"
-# The UUID of the root volume: /chosen/root-matching makes the kernel pick the IOMedia with this UUID.
-# Read out of the decoded OS image itself, not copied from the sheng port: the APSB volume superblock at
-# offset 0x3e1c400 of 044-76040-038.dmg carries this UUID at its 0xF0 field, and the same bytes are what
-# now sit in the "linux" partition (verified by reading the partition back from the phone). The manifest
-# and both windows were also checked against the constraints in drivers/NativeUfs/RootLayout.h.
-# scripts/check-dada.py refuses the all-zero placeholder: the kernel would then never mount a root.
+# UUID of the root volume, read out of the OS image the "linux" partition
+# carries (APSB superblock at 0x3e1c400 of 044-76040-038.dmg).
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-# Stock device tree /cpus reg values: six cores at 0x000..0x500, two at 0x10000 and 0x10100.
-cpu_regs = "0,0x100,0x200,0x300,0x400,0x500,0x10000,0x10100"
-psci_method = "smc"
 packed_data_ramdisk = true
-# The same research identity as the sheng port, because both target the same iPad7,1 restore image.
-# This is an image identity, not a claim about the phone hardware.
-ipad_identity = true
-unique_chip_id = "required"        # the platform seed is not stored in any repository
+unique_chip_id = "required"
 
-# Image parameters come from the Mu-Silicium device config (header_version 4 for dada);
-# [bootimg.image] would override them.
+[adt]
+[adt.chosen.u32]
+# This board prelinks no AMFI, so there is no platform-code policy to restrict.
+amfi-only-platform-code = 0
 
-# The panel handover region. The stock device tree in Resources/DTBs/dada.dtb already carries
-# /reserved-memory/splash_region with label "cont_splash_region" and reg 0xfc800000 + 0x2b00000, which is
-# the exact form Qualcomm's ABL looks up by literal path; it hands a live framebuffer to the next stage
-# instead of tearing the display down. So no [[bootimg.dtb_node]] override is needed or wanted here:
-# fdtput -c fails with FDT_ERR_EXISTS on a node that is already present, and unixnu bootimg treats that
-# as a build error. Re-add the override only if a future device tree loses the node.
-#
-# Framebuffer as measured on the phone through the UEFI GOP (dada_kernel/docs/uefi-fix.md):
-#   1200x2670, stride 4800 (0x12c0), format a8r8g8b8, base 0xfc800000, size 0xC38E80.
-# The XNU side does not consume these yet; they are here so the display probe can start from measured
-# values instead of guessing.
+[adt.product.string]
+model = "xiaomi,dada"
+
+[adt.product.u32]
+thin-bezel = 1
+
+[adt.defaults.u32]
+# Suspend/resume is not implemented for this board.
+sleep-disabled = 1
+
+[adt.buttons]
+[adt.buttons.string]
+compatible = "buttons"
+device_type = "buttons"
+
+[adt.buttons.strings]
+button-names = ["hold", "voldown", "volup"]
+
+[adt.buttons.u32]
+home-button-type = 2

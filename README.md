@@ -1,184 +1,174 @@
-# UniXNU-dada
+# UniXNU dada
 
-Device repository for the **Xiaomi 15 (`dada`, Qualcomm SM8750 "sun")** on
-[UniXNU](https://github.com/UniXNU/UniXNU), the project that boots iOS and macOS on non-Apple ARM64
-hardware through UEFI.
+Device support for the **Xiaomi 15** (`dada`, Qualcomm SM8750 "sun") on
+[UniXNU](https://github.com/UniXNU/UniXNU), which boots iOS and macOS on
+non-Apple ARM64 hardware through UEFI.
+
+The board profile selects
+[UniXNU-sm8750-common](https://github.com/7Night-kqx/UniXNU-sm8750-common) and
+the `ipados-17.7.11-21H461` OS profile in UniXNU. This repository owns the
+board device tree, peripheral selection, firmware inputs, memory and storage
+policy, and packaging.
 
 | Repository | Contents |
 | --- | --- |
-| [UniXNU](https://github.com/UniXNU/UniXNU) | Build driver, UEFI boot manager, DarwinBoot, generic drivers, kits and the 4 KiB XNU patches |
-| this repository | `board.toml`, defconfig, ADT generator, firmware preflight and the device package |
-| Mu-Silicium (local: `~/Src/Repo/dada/Mu-Silicium`) | UEFI firmware port, `Platforms/Xiaomi/dadaPkg`, `Binaries/dada` |
+| [UniXNU](https://github.com/UniXNU/UniXNU) | Build driver, component catalog, UEFI boot manager, DarwinBoot, generic drivers, kits and shared XNU patches |
+| this repository | `board.toml`, `porting.toml`, DTS, defconfig, device scripts and the device package |
+| `../uefi-dada` | Mu-Silicium fork with `Platforms/Xiaomi/dadaPkg` and the vendor binaries |
 
-The UEFI side already exists: Mu-Silicium boots dada to a framebuffer, a UEFI menu, UFS and USB
-device mode. This repository adds the UniXNU values and the pieces XNU needs on top of it.
+## Structure
+
+| Path | Contents |
+| --- | --- |
+| `porting.toml` | Subsystem inputs, findings, evidence and completion criteria |
+| `board.toml` | Device configuration, component selection, firmware and payload policy |
+| `feeds.toml` | Pinned SM8750 SoC source |
+| `configs/dada_defconfig` | Device kernel settings |
+| `dts/dada.dts` | Board memory, reservations, timer rate and ADT exports |
+| `patches/xnu/series` | Board patches |
+| `proprietary-files.txt` | Firmware input policy |
+| `package/` | Fallback UniXNU menu configuration |
+| `scripts/` | Preflight, archive checks and the storage kext-binding builder |
+| `docs/` | Pinned values, UFS notes and the transitional patches |
+
+Components are named by their canonical catalog IDs. `DadaUfs` is the
+board's own UFS transport: a fork of the sheng SM8550 driver reduced to the
+SM8750 controller facts and the `linux` root partition; see
+[docs/ufs-dada.md](docs/ufs-dada.md). The remaining checkouts under `drivers/`
+and `kits/` are generic components for later subsystems and are not selected
+yet.
 
 ## State
 
 | Stage | State |
 | --- | --- |
-| 1. UEFI firmware, framebuffer, menu, UFS, side buttons, UART7 | works in Mu-Silicium (`Mu-dada.img`) |
-| 2. UniXNU menu and configuration | not run yet |
-| 3. Payload volume (kernel, ADT, trust cache) | board values written; device inputs missing |
-| 4. DarwinBoot handoff | not run yet |
-| 5. XNU kernel entry / platform expert | **the first goal**; SM8750 platform expert does not exist yet |
-| 6. UFS root volume | needs the userdata window and a `qcom,sm8750-ufshc` binding |
-| 7. Userland | far away |
+| UEFI firmware, framebuffer, menu, UFS, side buttons, UART7 | works in Mu-Silicium |
+| UniXNU menu, payload volume and DarwinBoot handoff | works; the XNU console and panic screen run on the phone |
+| XNU kernel entry and platform expert | mounts the root image on the linux partition and executes the first userland task; an AMFI-less entitlement guard keeps exec alive |
+| UFS controller | adopts the controller, reads the GPT and publishes the linux root window; the root image mounts |
+| SystemOS cryptex | the union mount composes `SystemOS` over `/`; the dyld shared cache resolves |
+| Data volume | the packed `DBRDISK1` seed is published by `RamBlock` and mounted at `/private/var` |
+| AMFI and PMGR | the sheng-derived PMGR instrument publishes the `ApplePMGRNub` AMFI asks for |
+| **Userland** | **`launchd` (pid 1), `backboardd`, `SpringBoard`, `runningboardd`, `lsd`, `cfprefsd` and `containermanage` all run; the iOS userland starts completely** |
+| Display output | **not yet: the kernel video console draws, but no `IOMobileFramebuffer` service reaches userland** |
 
-Nothing here has been booted on hardware yet. `board.toml` marks every value that still has to be
-measured on the phone with `TODO(device)`; `scripts/check-dada.py` prints them as warnings before
-each firmware build.
+The userland is up. A captured kernel log lists `launchd p1`, `backboardd p57`,
+`SpringBoard p153`, `runningboardd p26`, `lsd p100`, `cfprefsd p90` and
+`containermanage p64`, so the missing piece is the display service, not the
+userland bring-up.
+
+`docs/known-values.md` records the boot checkpoints in order, every pinned
+address with its source, and the open measurements. The root image lives on the
+linux partition (`/dev/block/sda36`); reads are unverified in this build.
+
+### Boot log on the UFS disk
+
+With `dada-log=1` the kernel writes a diagnostic log to the last 32 MiB of the
+root partition (`/dev/block/sda36`), so a run can be read back from Android:
+
+```sh
+adb shell 'dd if=/dev/block/sda36 of=/data/local/tmp/log.bin bs=4096 skip=24406016 count=8192'
+adb pull /data/local/tmp/log.bin
+python3 scripts/read-dada-log.py log.bin --output out/log
+```
+
+The window is one header block (`DADALOG2`), 128 blocks of kernel message buffer
+and a ring of 16-block text slots, written every two seconds. The header carries
+`boot_id` so one boot is told from the next, and the text slots carry the
+process table (`launchd`, `SpringBoard`, `backboardd`, ...). `package/BootLog.c`
+is the writer, `scripts/read-dada-log.py` the reader.
 
 ## Build
 
-Prerequisites: `clang`, `python3`, `make`, `mtools`, `dtc`, a Mu-Silicium checkout with its
-submodules, and a `mu_basecore` tree for `--edk2` (or let `unixnu fetch` clone it).
+The firmware must embed UniXNU, UniXNUDxe, DarwinBoot and the shared
+`UniXNURamDiskDxe`, with DiskIoDxe and FAT support. Follow
+[firmware integration](https://unixnu.com/porting/uefi-firmware#required-integration).
+
+Run these commands from the UniXNU checkout:
 
 ```sh
-cd ~/Src/Repo/dada/UniXNU
-
 ./unixnu defconfig dada_defconfig -D ../UniXNU-dada
-./unixnu fetch
-
-# 1. Firmware only: proves the dada DSC, the memory map and the vendor binaries.
-./unixnu build firmware --uefi ~/Src/Repo/dada/Mu-Silicium --edk2 <mu_basecore>
-
-# 2. Kernel: the first run writes the compile records the device archives are built against.
-./unixnu build kernel
-
-# 3. Package and payload (device inputs: platform seed, trust cache, Data seed).
-./unixnu build package
-./unixnu build payload --unique-chip-id <hex>
-
-# 4. Boot image: BootShim + gzip(firmware volume) + device tree, Android header v4.
-./unixnu bootimg --uefi ~/Src/Repo/dada/Mu-Silicium --dtb ~/Src/Repo/dada/Mu-Silicium/Resources/DTBs/dada.dtb
-
-fastboot boot out/dada/boot/boot.img
+./unixnu fetch -D ../UniXNU-dada
+./unixnu status --json -D ../UniXNU-dada
+./unixnu build kernel -D ../UniXNU-dada
+./unixnu build package -D ../UniXNU-dada
+./unixnu build payload -D ../UniXNU-dada --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID" \
+  --data-ramdisk /path/to/data.dbr --trust-cache /path/to/trustcache
+./unixnu build firmware -D ../UniXNU-dada --uefi ../uefi-dada
+./unixnu bootimg -D ../UniXNU-dada --uefi ../uefi-dada --dtb /path/to/firmware.dtb
 ```
 
-`unixnu status` shows where every module comes from. `--local` / `--local-module` point a module at a
-working copy while developing.
+Outputs are under `out/dada/ipados-17.7.11-21H461/dada/`. The payload step
+compiles `dts/dada.dts` and generates `kernel.macho.adt`; the boot image takes
+the firmware's own FDT.
 
-### Two changes the stock trees need
+The kernel step needs the pinned kernelcache and either UniXNU's Linux
+toolchain or a macOS Xcode host; archives build with the recorded clang
+compile records. The payload needs the platform seed; a Data seed and a trust
+cache are optional inputs. None of them is stored in any repository. Save
+machine-specific paths in `local.toml` in this repository (copy
+`local.toml.example`) or in `unixnu.local.toml` in UniXNU.
 
-`unixnu bootimg` is stricter than the device bootloader about two things, and dada trips both.
-The patches are in `docs/patches/`; apply them once to the checkouts:
+The stock-tree changes are recorded in [docs/patches](docs/patches): Android
+boot header v4 verification, the AMFI-conditional native-root guard, the
+`XNU_NATIVE_UFS_ARCHIVE` override and the offline SystemOS mount gate in UniXNU, the BootShim ARM64 `image_size`,
+and the DSC/FDF entries that put UniXNU, `UniXNURamDiskDxe` and DarwinBoot into
+the firmware volume. This workspace has all of them applied; a fresh
+`uefi-dada` checkout needs the DSC/FDF/BootShim patches, and a fresh UniXNU
+checkout needs the four script patches until they are upstreamed. UniXNU's
+`components.toml` also carries the `DadaUfs` catalog entry. The porting record
+lists the limit.
 
-```sh
-# 1. UniXNU verifies Android boot header v0-v2 only; dada uses v4 (no load addresses, 4 KiB page,
-#    4 KiB boot signature after the data). Adds the v3/v4 verification path.
-git -C ~/Src/Repo/dada/UniXNU apply ~/Src/Repo/dada/UniXNU-dada/docs/patches/unixnu-bootimg-header-v4.patch
+## Host build
 
-# 2. The Mu-Silicium BootShim writes FD_SIZE into the ARM64 header image_size field, while UniXNU
-#    verifies that the field describes the shim plus the firmware volume. One-line shim change.
-git -C ~/Src/Repo/dada/Mu-Silicium apply ~/Src/Repo/dada/UniXNU-dada/docs/patches/mu-silicium-bootshim-header-size.patch
-
-# 3. dada's DSC/FDF only list the Mu-Silicium drivers, so the firmware volume would boot Mu-Silicium's
-#    own menu. This adds the UniXNU application, its registrar and DarwinBoot.
-git -C ~/Src/Repo/dada/Mu-Silicium apply ~/Src/Repo/dada/UniXNU-dada/docs/patches/mu-silicium-unixnu-components.patch
-```
-
-Patch 3 has to come after any change of your own to `dada.dsc`/`dada.fdf`; it is a plain context
-patch against the committed files.
-
-With both applied, the boot image for dada packs and verifies:
-
-```
-ANDROID! header v4, kernel 2,185,293 bytes (gzip of 112-byte shim + 0x300000 firmware volume),
-appended dada device tree (966,281 bytes), 2,195,456 bytes total
-```
-
-The v4 support is a candidate for upstream UniXNU (`scripts/unixnu/bootimg.py`); the shim change
-belongs to the UEFI port, as uefi-sheng carries it too.
-
-### Verified on this machine
-
-Linux host, Mu-Silicium at `~/Src/Repo/dada/Mu-Silicium`, `mu_basecore` at `cfb93724a0`, RELEASE.
+The Linux toolchain builds the whole pipeline on a Linux host. On 2026-10-26 a
+12-core Ubuntu 24.04 host produced:
 
 | Step | Result |
 | --- | --- |
-| `unixnu build firmware` | 47 s; `SILICIUM_UEFI.fd` exactly `0x300000` bytes, sha256 `31692ac18c695f6e…` |
-| Mu_Basecore patch series | all five applied and reverted around the build; tree left clean |
-| preflight | 40 memory descriptors, 58 vendor inputs, 0 errors, 3 known device TODOs |
-| `unixnu bootimg` | Android v4, 2,195,456 bytes, sha256 `8b796bc356218881…` |
-| payload layout | 112-byte shim + `0x300000` firmware volume, gzip 3,145,840 bytes, 966,281-byte DTB appended |
-| `fastboot boot` | not run; nothing has been flashed yet |
+| `./unixnu build kernel -D ../UniXNU-dada` | `kernel.macho`, 50,954,240 bytes, sha256 `d47f4ac9760857ef49fa03efc47de58e157854dca23f95174d6bf56c6ecae57b`; 24 prelink components, no AMFI or PMGR |
+| `./unixnu build firmware -D ../UniXNU-dada --uefi ../uefi-dada --edk2 ../uefi-dada/Mu_Basecore` | `SILICIUM_UEFI.fd`, `0x300000` bytes, sha256 `e53a559c9a9a4293a5ab72b86a4d08b3cd231e88863d5bcc198445c5a505ff28`; embeds UniXNU, UniXNUDxe, UniXNURamDiskDxe and DarwinBoot |
+| `./unixnu build payload -D ../UniXNU-dada` | `payload.img`, 192 MiB `DADAESP`; kernel and ADT hashes in `payload.json` |
+| `./unixnu bootimg -D ../UniXNU-dada` | `boot.img`, 203,558,912 bytes, Android header v4, sha256 `a629ae1f904fe21e051ff078b073c7e18ad45198853d20baa9a592e5a0fbd744` |
 
-With patch 3 applied the volume contains the three UniXNU components and the boot image grows to
-2,228,224 bytes:
+The build used the cached 21H461 kernelcache and a placeholder platform seed
+from the ignored `unixnu.local.toml`. The image has not been flashed;
+`fastboot boot out/dada/ipados-17.7.11-21H461/dada/boot/boot.img` is the next
+device step. [docs/evidence](docs/evidence) holds the reports.
 
-| Component | Output |
-| --- | --- |
-| `UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf` | `UniXNUDxe.efi`, 9,728 bytes |
-| `UniXNUPkg/Application/UniXNU/UniXNU.inf` | `UniXNU.efi`, 81,408 bytes |
-| `DarwinBootPkg/Driver/DarwinBoot.inf` | `DarwinBoot.efi`, 18,432 bytes |
+### Payload on the ESP
 
-`Build/dadaPkg/RELEASE_CLANGPDB/FV/FVMAIN.inf` lists all three FFS files, so they are inside the
-compressed firmware volume. Without a payload volume on the ramdisk the menu has nothing to start;
-that is the expected Stage 2 result until `unixnu build kernel` has run on macOS.
+`/dev/block/sda35` (`by-name/esp`) carries the payload for firmware boots without an initrd. It must
+be FAT32 with 4096-byte logical sectors, because the UFS LUN block size is 4096; a 512-byte-sector
+payload image fails to mount with `logical sector size too small for device`. The geometry and the
+deployed kernel/ADT hashes are in [docs/known-values.md](docs/known-values.md).
 
-The preflight finds the UEFI checkout from `--uefi`, `$UNIXNU_UEFI`, a usual name in the working
-directory, or a sibling of the device repository, because the driver does not export `--uefi` to
-preflight scripts.
-
-
-### Just the firmware, without UniXNU
-
-The Mu-Silicium checkout still builds on its own:
+## Checks
 
 ```sh
-cd ~/Src/Repo/dada/Mu-Silicium
-python3 build_uefi.py -d dada -r RELEASE -c
-# -> Build/dadaPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd (0x300000 bytes)
+python3 scripts/check-dada.py --uefi ../uefi-dada
+python3 scripts/tests/check-kernel-archives.py --device .
+python3 ../UniXNU/scripts/porting-record.py check --device .
 ```
 
-Note: this only works while `dada.dsc`/`dada.fdf` carry no UniXNU components, because
-`build_uefi.py` does not put the UniXNU package paths on `PACKAGES_PATH`. With the components in
-place (patch 3 applied) use `./unixnu build firmware --uefi ../Mu-Silicium` instead. `-c` also
-deletes `Mu-*.*`, including `Mu-dada.img`.
+The first is the firmware preflight: memory descriptors, vendor inputs, FD
+geometry, UFS facts and kernel archive consistency. The second checks the
+defconfig, archive plan, builder products and prelink-slide handling without
+Xcode. The third validates `porting.toml` and its component coverage; the
+`Porting record` CI job runs the same check.
 
-## Files
+## Documentation
 
-| Path | Purpose |
-| --- | --- |
-| `board.toml` | Firmware, payload, ADT and prelink values for dada |
-| `configs/dada_defconfig` | Kernel modules linked into the XNU build |
-| `scripts/make-dada-adt.py` | Apple-format device tree the kernel is handed (`Payloads/kernel.macho.adt`) |
-| `scripts/check-dada.py` | Firmware preflight: memory map, stack, vendor inputs, placeholders |
-| `package/unixnu.toml` | Fallback UniXNU configuration for a hand-made payload volume |
-| `docs/known-values.md` | Every pinned address with its source, and what is still unknown |
-| `docs/patches/` | The two changes the stock UniXNU and Mu-Silicium checkouts need to pack a dada boot image |
+- [Porting](https://unixnu.com/porting/)
+- [Device repository specification](https://unixnu.com/porting/device-repository)
+- [Device-tree specification](https://unixnu.com/porting/device-tree)
+- [Component catalog](https://unixnu.com/reference/components)
+- [UFS porting](https://unixnu.com/porting/ufs)
+- [Migration](https://unixnu.com/porting/migration)
+- [Record guide](https://unixnu.com/porting/records)
 
-## Device facts pinned here
-
-| Item | Value | Source |
-| --- | --- | --- |
-| Firmware base / size | `0xA7100000` / `0x300000` | `Resources/Configs/dada.toml` + `MemoryMapLib.c` |
-| Boot image header | v4 | `Resources/Configs/dada.toml` |
-| GIC distributor / redistributor | `0x16000000` / `0x16080000`, stride `0x40000` | stock DT `interrupt-controller@16000000` |
-| Timer | `0x16800000`, 19.2 MHz | stock DT `timer@16800000` |
-| UFS controller / PHY | `0x1D84000` / `0x1D80000` | stock DT, `edk2-msm/ufs-info-dada.txt` |
-| CPUs | 8 cores: `0,0x100..0x500`, `0x10000`, `0x10100` | stock DT `/cpus` |
-| Panel | 1200x2670, 32 bpp | `dada.dsc` `PcdFrameBuffer*` |
-| Console UART | UART7 `qup_uart@a9c000`, 115200n8 | Mu-Silicium device notes |
-
-## Known gaps
-
-| Subsystem | State |
-| --- | --- |
-| Touch | no UEFI and no XNU driver (Synaptics TCM over SPI, `synaptics,tcm-spi`) |
-| GPU | Adreno 830: Mu-Silicium has no driver, UniXNU's Adreno path is A740/SM8550 only |
-| WiFi / BT / audio / camera / sensors | no drivers anywhere in the stack |
-| USB host | wiring exists, Type-C role switch does not work on SM8750 |
-| Suspend / resume | not implemented; the ADT sets `sleep-disabled` |
-
-## References
-
-- [UniXNU porting guide](https://unixnu.com/porting/)
-- [Mu-Silicium dada notes](../Mu-Silicium/dada-uefi.md) and [driver inventory](../Mu-Silicium/dada-uefi-drivers.md)
-- Stock device tree: `Mu-Silicium/Resources/DTBs/dada.dtb`
-- Mainline bring-up tree: `~/Src/Repo/dada_kernel/device-tree/sm8750-xiaomi-dada-mainline.dts`
-- UFS observations: `~/Src/Repo/edk2-msm/ufs-info-dada.txt`
+Report build results and device observations separately, with source
+revisions, commands and captured output.
 
 ## License
 

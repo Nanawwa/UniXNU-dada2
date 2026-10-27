@@ -1,8 +1,8 @@
 # Known values and open measurements
 
-Every number `board.toml` and `scripts/make-dada-adt.py` pin, where it comes from, and what still has
-to be read on the phone. Values are from the **stock** device tree
-(`Mu-Silicium/Resources/DTBs/dada.dtb`), the Mu-Silicium platform package, or the mainline bring-up
+Every number `board.toml`, `dts/dada.dts` and the typed `[adt]` tables pin, where it comes from, and
+what still has to be read on the phone. Values are from the **stock** device tree
+(`uefi-dada/Resources/DTBs/dada.dtb`), the Mu-Silicium platform package, or the mainline bring-up
 tree (`dada_kernel/device-tree/sm8750-xiaomi-dada-mainline.dts`); the two trees agree on every
 address below.
 
@@ -41,8 +41,8 @@ Stock tree `/cpus` reg values, in order:
 | `cpu@10000` | `0x10000` | prime core (Aff2 = 1) |
 | `cpu@10100` | `0x10100` | prime core (Aff2 = 1) |
 
-`[payload.adt] cpu_regs` reproduces them exactly; the ADT tool accepts values above `0xffff` because
-of the two prime cores, and requires `Aff0 == 0`.
+The SoC DTSI reproduces them exactly and `dts/dada.dts` adds the timer rate. The generator accepts
+values above `0xffff` because of the two prime cores, and requires `Aff0 == 0`.
 
 ## ADT
 
@@ -52,10 +52,10 @@ of the two prime cores, and requires `Aff0 == 0`.
 | `dram-size` | `0x80000000` (2 GiB) | Measured 15.12 GiB total but fragmented across 16 regions (`0xa00000000` 8 GiB, `0x8c0000000` 5 GiB, rest scattered below `0xd8000000`); the ADT holds one contiguous pair, so 2 GiB is the conservative first-boot value. See *Memory map* below |
 | `owned-memory-size` | `0x10000000` (256 MiB) | The window DarwinBoot hands to XNU, as ONE conventional-memory run. 256 MiB is the size that was measured to allocate on this phone (the run the loader picked was at physical `0xbc007c000`); 1 GiB was never observed to be allocatable. **TODO(device)**: enlarge for the Data ramdisk stage |
 | `chip_id` | `0x208` | software identity seed for `IOPlatformUUID`, not an Apple chip id |
-| `cpu_regs` | see above | |
-| `psci_method` | `smc` | stock DT `enable-method = "psci"` |
-| `crypto-hash-method` | `sha2-384` | target iPad DT |
-| `root_match_volume_uuid` | all-zero | **TODO(device)**: UUID of the root volume once the userdata image exists |
+| CPUs | `/cpus` reg values | `dts/dada.dts` includes the SoC DTSI; the generator emits one `cpuN` per enabled CPU |
+| `psci_method` | `smc` | SoC DTSI `/psci` node, `method = "smc"` |
+| `crypto-hash-method` | `sha2-384` | OS profile `[adt.chosen]` |
+| `root_match_volume_uuid` | `04769D26-2CA0-4825-B443-E2E5F88300F2` | APSB superblock of `044-76040-038.dmg`; `[payload.adt]` |
 
 ## DRAM
 
@@ -91,10 +91,14 @@ error.
 
 | Item | Value | Source |
 | --- | --- | --- |
-| `first_lba` | `3124736` (`0x2FAE00`) | GPT entry 34, LUN 0 |
-| `last_lba` | `100781311` (`0x601CCFF`) | same |
+| partition | `linux` | GPT entry of LUN 0 |
+| `first_lba` | `101074176` (`0x06064500`) | `/sys/class/block/sda36`: start 808593408 x 512 / 4096 |
+| `last_lba` | `125488383` (`0x077ACCFF`) | same entry, 195313664 x 512 / 4096 bytes |
 | `lba_bytes` | `4096` | logical block size |
-| capacity | `400001335296` B (372.53 GiB) | derived |
+| capacity | `100000595968` B (93.1 GiB) | last - first + 1 blocks |
+
+The partition carries the SHNGROOT manifest and the IPSW's OS and SystemOS windows, so it is separate
+from the `userdata` partition sheng uses. `board.toml [userdata]` holds these values.
 
 ## Firmware inputs
 
@@ -137,12 +141,57 @@ ANDROID! v4, kernel 2,185,293 B, ramdisk 0 B, image 2,195,456 B
 gzip inflates to 3,145,840 B = 112 B shim + 0x300000 firmware volume, then 966,281 B of DTB
 ```
 
+## ESP (sda35)
+
+The phone's ESP is `/dev/block/sda35` (`/dev/block/by-name/esp`), 1,199,570,944 bytes (1.117 GiB).
+dada uses it as the payload volume for firmware boots that carry no initrd. It is FAT32 with
+**4096-byte logical sectors** (the UFS LUN 0 block size), 4-sector clusters, label `DADAESP` and
+serial `5348-4E47`.
+
+| Item | Value |
+| --- | --- |
+| device | `/dev/block/sda35`, `by-name/esp` |
+| bytes | `1,199,570,944` (`292,864` x 4096) |
+| filesystem | FAT32, 4096-byte logical sectors, 4-sector clusters |
+| contents | `EFI/UniXNU/unixnu.toml`, `EFI/UniXNU/build-info.txt`, `EFI/UniXNU/Payloads/kernel.macho`, `EFI/UniXNU/Payloads/kernel.macho.adt` |
+| kernel.macho | 51,044,352 bytes, sha256 `39e8fb3ceac8ef7cc15cc287d5134f075c0e57379957047be1592f3fda6157e5` |
+| kernel.macho.adt | 13,852 bytes, sha256 `165c5a17ea2c2f30f254df0d80237dab20a703e9f09121094e69e6d0ee279155` (regenerated per build: it carries a fresh random seed) |
+
+An image written by `unixnu build payload` uses 512-byte logical sectors. Copied to this 4K-logical
+partition, Linux refuses it with `FAT-fs (sda35): logical sector size too small for device`. Build the
+ESP image with the same file tree and a 4096-byte filesystem sector (`mformat -F -T 292864 -M 4096`),
+then write it with `dd`; verify the readback hash and mount it read-only before rebooting.
+
+## Host build, 2026-10-26
+
+Linux host (Ubuntu 24.04, 12 jobs, `/opt/unixnu-linux` toolchain, cached 21H461 kernelcache):
+
+| Step | Result |
+| --- | --- |
+| kernel + prelink | `kernel.macho`, 51,044,352 bytes, sha256 `d47f4ac9760857ef49fa03efc47de58e157854dca23f95174d6bf56c6ecae57b` |
+| prelink selection | 24 components; no `AppleMobileFileIntegrity` and no `ApplePMGR`; no early security initializer; slide `-0x1000000` |
+| firmware | `SILICIUM_UEFI.fd`, `0x300000` bytes, sha256 `e53a559c9a9a4293a5ab72b86a4d08b3cd231e88863d5bcc198445c5a505ff28`; contains UniXNU, UniXNUDxe, UniXNURamDiskDxe and DarwinBoot |
+| payload | `payload.img`, 192 MiB `DADAESP`, ADT 13,852 bytes |
+| boot image | `boot.img`, 203,558,912 bytes, Android header v4, sha256 `f6d3b119c831aff32d272a2dc16edb293161286a17c75bbabb2ef5d20e1957f3` |
+
+`docs/patches` carries the changes that are not upstream yet:
+`unixnu-bootimg-header-v4.patch` (header v4 verification),
+`unixnu-payload-amfi-guard.patch` (require PMGR only when AMFI is prelinked) and
+`unixnu-ufs-archive-override.patch` (honour `XNU_NATIVE_UFS_ARCHIVE`) and
+`unixnu-owner-cache-bringup.patch` (SystemOS mount without owner trust) for
+UniXNU, and `mu-silicium-unixnu-ramdisk.patch` for the `UniXNURamDiskDxe`
+entry in the firmware DSC/FDF. UniXNU's `components.toml` also carries the
+`DadaUfs` entry. The platform seed was a placeholder; the image was not
+flashed.
+
 ## Chip identity
 
 The IPSW identity (`iPad7,1` / iPadOS 17.7.11 / `21H461` / `j120ap`) is the image the UniXNU kernel
-build and prelink are pinned to; it says nothing about the phone. `ipad_identity = true` makes the ADT
-present the same identity so `libMobileGestalt` matches, which is what the later userland stages need.
-Switch it off for a neutral first-boot tree, or replace it with a phone identity when one is chosen.
+build and prelink are pinned to; it says nothing about the phone. The OS profile's typed `[adt]` tables
+make the ADT present the same identity so `libMobileGestalt` matches, which is what the later userland
+stages need. The board overrides `/product/model` with `xiaomi,dada` and clears
+`amfi-only-platform-code` because no AMFI is prelinked. Switch the identity off in a private profile
+for a neutral first-boot tree, or replace it with a phone identity when one is chosen.
 
 ## Kernel build: what is selected, and why
 
@@ -156,31 +205,33 @@ archive builders in `board.toml [kernel] archives` are exactly the ones those sw
 | `XNU_SOURCE_PTHREAD` | `y` | `build-libpthread-kernel.py` |
 | `XNU_ARM_DT_PLATFORM` | `y` | `build-arm-driver.py ArmDTPlatform` |
 | `XNU_ARMCPU` | `y` | `build-arm-driver.py ArmCpu` |
-| `XNU_NATIVE_UFS` | `n` | none (see *Why the storage transport is off* below) |
-| `XNU_NATIVE_AES` | `y` | `build-arm-driver.py NativeAES` + `build-native-aes-bindings.py` |
+| `XNU_NATIVE_UFS` | `y` | `component:DadaUfs` + the storage class/binding builders |
+| `XNU_NATIVE_AES` | `y` | `component:SoftwareAES` + `build-software-aes-bindings.py` |
 | `XNU_BOOT_PROGRESS` | `n` | none |
 | `XNU_NATIVE_LEGACY_DISPLAY` | `n` | none |
 
-### Why the storage transport is off
+### Storage transport mode
 
-`CONFIG_XNU_NATIVE_UFS` is `n` on this board. Two independent reasons:
+`CONFIG_XNU_NATIVE_UFS` is `y`. Two facts decided how it is built:
 
-1. The `NativeUfs` in this tree is the sheng (SM8550) driver. It hardcodes that controller's
-   compatible names and its GCC clock offsets, and the stock dada device tree carries no `ufshc` `reg`
-   for it, so it cannot drive this phone yet (see *UFS* below and `docs/ufs-sm8750.md`).
-2. It cannot even be *linked* here. A transport derives from `IOBlockStorageDevice`, a class that is
-   not in the xnu tree, so the port compiles that class from Apple's IOStorageFamily source and links
-   it into the kernel. The kernelcache's own `com.apple.iokit.IOStorageFamily` kext defines the same
-   class name, and `OSMetaClass` panics on the collision:
+1. `DadaUfs` is the board fork of the sheng (SM8550) transport. `drivers/DadaUfs` keeps only the
+   qcom,ufshc/qcom,sm8750-ufshc names, the SM8750 GCC offsets and the `linux` root partition (see
+   *UFS* below and `docs/ufs-dada.md`), so it attaches to this controller.
+2. It cannot be linked with its own base class. A transport derives from `IOBlockStorageDevice`, a
+   class that is not in the xnu tree. Compiling that class into the kernel collides with the
+   kernelcache's own `com.apple.iokit.IOStorageFamily` kext:
 
    ```
    OSMetaClass: Kext com.apple.iokit.IOStorageFamily class IOBlockStorageDevice is a duplicate;
     kext __kernel__ already has a class by that name. cpp:896
    ```
 
-   That was the second panic this port reached (the first was the panic-log address, below). With the
-   transport off, the class is not built into the kernel, the prelinked kext registers cleanly, and the
-   boot reaches the root mount -- where the missing driver is what stops it.
+   That was the second panic this port reached (the first was the panic-log address, below). The board
+   therefore builds the class only as a reference object and rebinds the transport's imports to the
+   prelinked kext's own addresses; `scripts/build-storage-classes.py` and
+   `scripts/build-storage-kext-bindings.py` implement that step, and the kernel links
+   `build/dada-ufs/libDadaUfs.a` through the board's `CONFIG_XNU_NATIVE_UFS_ARCHIVE` override. The
+   prelinked kext registers the class exactly once.
 
 ### Why AMFI is not prelinked
 
@@ -267,7 +318,7 @@ build switch.
 
 ### Why the legacy display instrument is off
 
-`build-native-legacy-display.py` compiles `kits/sheng` sources — touch, keystore, GPU power, Novatek,
+`build-native-legacy-display.py` compiled `kits/sheng` sources — touch, keystore, GPU power, Novatek,
 cpufreq — to drive the original `IOMobileFramebufferLegacy` lifecycle. Those are SM8550 board programs.
 
 The text console does not need it. DarwinBoot fills `boot_args.Video[6]` from the UEFI GOP
@@ -276,9 +327,9 @@ depth=32) and XNU's own `pexpert` video console draws through that. The instrume
 when a framebuffer *service* is wanted rather than a console, and it needs a trimmed, board-neutral
 builder first.
 
-### NativeUfs verified block mode
+### DadaUfs verified block mode
 
-`drivers/NativeUfs` serves reads through `configureVerification()` only when `NATIVE_VERIFIED_BLOCK` is
+`drivers/DadaUfs` serves reads through `configureVerification()` only when `NATIVE_VERIFIED_BLOCK` is
 defined. That path requires an owner-signed policy bundle at run time: with no policy it refuses with
 `policy count invalid` and never publishes the device, so no root is reachable. This repository's
 `scripts/build-arm-driver.py` therefore does not force the macro; it follows `--verified-root`, matching
@@ -296,20 +347,187 @@ Measured, in order, on the real device (each step is the panic the screen showed
 | 3 | `OSMetaClass: ... IOBlockStorageDevice is a duplicate` | the port built `IOBlockStorageDevice` into the kernel, colliding with the kernelcache's own IOStorageFamily kext |
 | 4 | `"AMFI: No PMGR?y\n" @ConfigurationSettings.cpp:235` | AMFI wanted the PMGR nub that only the owner-root path publishes |
 | 5 | `amfi interface not available @kern_trustcache.c:477` | the kernel's own trust cache runtime demands the AMFI interface, and AMFI was no longer prelinked |
-| 6 | `Failed to mount root device @IOKitBSDInit.cpp:304` | **the goal**: the boot reached the root mount, and no driver publishes this board's UFS, so there is no root media |
+| 6 | `Failed to mount root device @IOKitBSDInit.cpp:304` | the boot reached the root mount with no root media, because no userdata image was flashed |
+| 7 | `Kernel data abort` at `pc 0xfffffff00797ce24` (`IOTaskHasEntitlement+0x44`), `lr 0xfffffff00797ce18`, `esr 0x96000006` (data abort, translation fault level 2, read), `far 0x1b0` | the root image on the linux partition mounted and `launchd` was exec'd. AMFI is not prelinked, so `amfi` is NULL and the entitlement query dereferenced `amfi + 0x1b0`. The call chain is `bsdinit_task` -> `___mac_execve` -> `process_signature` -> `machine_task_process_signature` -> `IOTaskHasEntitlement` |
+| 8 | `Kernel data abort` at `pc 0xfffffff00794a0d0` (`IOUserClient::copyClientEntitlement+0x58`), `esr 0x96000005`, `far 0x1d0` | the same NULL `amfi`, reached from an `fsctl`/`VNOP_IOCTL` path into `IOUserClient::copyClientEntitlement`; the more-guards patch returns no entitlement there too |
 
-Step 1 is fixed by the device-tree panic region; step 3 by leaving the storage transport out; steps
-4 and 5 by leaving AMFI and the PMGR out of the prelinked kernel and by compiling the trust cache
-runtime out.
+Step 1 is fixed by the device-tree panic region; step 3 by not linking the base class and binding the
+transport imports to the kext instead; steps 4 and 5 by leaving AMFI and the PMGR out of the prelinked
+kernel and by compiling the trust cache runtime out.
 
-Step 6 is the milestone of this port: the video console runs the kernel's own output, and the kernel
-stops with a genuine missing-driver panic at the root mount, because the storage transport for this
-controller does not exist yet (see *UFS* and `docs/ufs-sm8750.md`). The next work is that driver;
-after it, the root volume is mounted and the owner-root path (AMFI, PMGR, the trust bundle) becomes
-the next wall.
+Step 6 was the milestone without a root image. The image now lives on the linux partition
+(`/dev/block/sda36`), DadaUfs publishes its window, and the root volume mounts; the first userland exec
+reaches step 7.
+
+Step 7 and step 8 are the same AMFI wall from different callers: exec asks AMFI for entitlements,
+and an ioctl path asks `IOUserClient` for them. This kernel prelinks no AMFI, so `amfi` is NULL.
+`patches/xnu/zzzzz-dada-entitlements-without-amfi.patch` and
+`patches/xnu/zzzzzz-dada-more-amfi-null-guards.patch` return "not entitled" (or no data) at every
+reachable site instead of dereferencing NULL. That is a bring-up guard, not a security policy; the
+proper fix is the owner-root path with AMFI and PMGR prelinked.
+
+### AMFI + PMGR attempt
+
+Restoring AMFI is the real fix, and sheng runs this same kernelcache with an ABI-qualified `ApplePMGR`
+subclass (`ShengPlatformPower`) that publishes the nub AMFI asks for. That instrument is not
+reproducible from this workspace:
+
+- `scripts/build-sheng-platform-power.py` requires reference prelink candidates under
+  `build/xnu-prelink/` (`native-owner-ufs-*-candidate.macho`). They are build products of sheng's
+  owner-root experiments and are not in the repository.
+- The build binds `sheng_original_pmgr_nub_create/read/write` and the ApplePMGR vtable entries to
+  absolute addresses inside that candidate; without it the bindings cannot be derived.
+
+So AMFI + PMGR stays unbuilt here. The no-AMFI guards above are what keeps the boot moving until those
+owner-root candidates (or a PMGR provider for this board) are available.
 
 The `?y` in the step 4 message is literal text of the kext's message, not a rendering fault: the panic
 screen skips characters below 32 and prints the rest as they are.
+
+### Exec policy bring-up bypass
+
+With the lock initialised, `launchd` was killed by an exec policy failure:
+`unexpected SIGKILL of launchd` with `namespace 9 code 0x8`, i.e. `OS_REASON_EXEC` /
+`EXEC_EXIT_REASON_SECURITY_POLICY`, and no description, which is the `imgp->ip_mac_return` path:
+AMFI's signature hook rejected the init binary because no StaticTrustCache is packaged.
+
+`patches/xnu/zzzzzzzzzzzzzzz-dada-no-cs-bringup.patch` clears `ip_mac_return` and the `ip_cs_error`
+reason when the boot argument `dada-no-cs=1` is present (it is in the payload arguments). This is a
+bring-up bypass, not policy: it only affects the exec gate and the board must be given a real
+`StaticTrustCache.img4` (IPSW component, not in the local cache) for a faithful boot.
+
+### Static trust cache
+
+The exec policy denial is answered with the two original version-2 trust-cache modules from the IPSW
+(no `StaticTrustCache.img4` exists in this restore; the per-dmg `Firmware/*.dmg.trustcache` entries
+carry them). `inputs/trustcache/provenance.json` records the download and hashes:
+
+| Input | Module SHA-256 | Entries |
+| --- | --- | --- |
+| `044-76040-038.dmg.trustcache` | `da88460e…0fc2` | 2478 |
+| `044-76034-038.dmg.trustcache` | `d121ba89…3651` | 76 |
+
+Bundled as `u32 count=2, offsets[12, 12+59496], module, module` the result is
+`7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7`, the first
+`profiles/os/ipados-17.7.11-21H461` `payload.trust_cache_sha256` pin. `unixnu payload --trust-cache`
+copies it to `Payloads/kernel.macho.trustcache`, and DarwinBoot validates it (`ValidTrustCaches`:
+version 2 modules, 24-byte sorted entries) before publishing the ADT node.
+
+The IPSW was fetched with HTTP range requests because DNS for `updates.cdn-apple.com` is hijacked to
+`198.18.0.136` in this environment; the Apple CNAME was resolved over DoH and the requests pinned to
+`200.25.91.48`. Only the zip central directory tail and the two small trust-cache entries were
+downloaded (about 1 MiB plus 56 KiB).
+
+### Trust cache lock (bring-up)
+
+With AMFI finally prelinked, the first `launchd` exec went through
+`mac_vnode_check_signature` -> `ubc_cs_blob_add` -> `query_trust_cache` and panicked with
+`Taking non-sleepable RW lock with preemption enabled @ lock_rw.c:14`.
+
+`lck_rw_init()` marks a lock sleepable (`lck_rw_can_sleep = true`); the zero-initialised lock does not.
+`CONFIG_XNU_TRUST_CACHE_RUNTIME=n` compiled `trust_cache_runtime_init()` out, so
+`trust_cache_rt_lock` stayed zero-initialised while the AMFI path still queried it. The setting is now
+`y`, and `[kernel.prelink] early_security_init` is restored to the profile value
+`com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0`; that initializer runs during the kernel
+bootstrap, before `trust_cache_runtime_init()` in `osfmk/kern/startup.c`, so `amfi` exists when the
+runtime initialises its lock. AMFI and PMGR are also listed explicitly in the roots.
+
+No StaticTrustCache or Cryptex SystemTrustCache is packaged yet (the local IPSW cache has only the
+kernelcache), so the next boot decides whether the trust cache query finds the init binary or kills it.
+
+### PMGR instrument (dada)
+
+`sandbox_get_container_expected()` failed because `launchd` asks the sandbox kext for its container and
+the prelinked sandbox kext needs AMFI and PMGR. Adding `com.apple.security.sandbox` to the prelink roots
+pulled `com.apple.driver.AppleMobileFileIntegrity` and `com.apple.driver.ApplePMGR` in as dependencies
+(27 components), but AMFI still needs an `ApplePMGRNub` service.
+
+sheng's instrument is reused as a dada component: `drivers/DadaPlatformPower/ShengPlatformPower.cpp`
+plus `scripts/build-dada-platform-power.py` build the `ApplePMGR` subclass and publish the nub, called
+from `bsd_init()` under `CONFIG_XNU_SHENG_PMGR=y` with boot argument `sheng-pmgr=2`.
+
+sheng derived its bindings from an owner-root prelink candidate that this workspace does not carry. The
+same kernelcache and the same `-0x1000000` slide place the same functions at the same virtual
+addresses, so the builder binds them directly and the addresses were checked in this tree:
+
+| Symbol | Address | Check |
+| --- | --- | --- |
+| `__ZN9ApplePMGRC2EPK11OSMetaClass` | `0xfffffff0049f003c` | constructor prologue |
+| `__ZN9ApplePMGRD2Ev` | `0xfffffff0049f019c` | (sheng binding) |
+| `__ZN9ApplePMGR10gMetaClassE` | `0xfffffff006adf490` | (sheng binding) |
+| `__ZN9ApplePMGR7readAonEv` | `0xfffffff004a20fbc` | `mov w0,#0; ret; ret` |
+| `__ZN9ApplePMGR8writeAonEy` | `0xfffffff004a20fc4` | `ret; mov w0,#0; ret` |
+| `_sheng_original_pmgr_nub_create` | `0xfffffff004a22568` | function prologue |
+| `_sheng_original_pmgr_nub_read` | `0xfffffff004a24adc` | identical instruction sequence |
+| `_sheng_original_pmgr_nub_write` | `0xfffffff004a230ec` | identical instruction sequence |
+
+The ApplePMGR vtable at `0xfffffff005ce26d8` carries the AON stubs in slots 320/321 in this kernel too.
+`sheng_pmgr_run()` loads `com.apple.driver.ApplePMGR`, resolves `ApplePMGR`/`ApplePMGRNub` metaclasses,
+constructs the subclass, creates the original nub, attaches and registers both services, then checks
+`waitForMatchingService("ApplePMGRNub")`.
+
+### Offline SystemOS mount (bring-up)
+
+iOS 17 keeps the dyld shared cache in the SystemOS cryptex, so `launchd` cannot exec without that
+volume mounted. XNU already carries an offline owner instrument for exactly this:
+`XNU_OWNER_CACHE_MOUNT` calls `native_owner_cache_prepare()` in `load_init_program()`, mounts the
+SystemOS APFS volume read-only and hands the init process
+`DYLD_SHARED_CACHE_DIR=/private/preboot/System/Library/Caches/com.apple.dyld`.
+
+This board enables it in bring-up mode:
+
+- `CONFIG_XNU_OWNER_CACHE_MOUNT=y`, `CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="8846FE78-2910-4297-AF97-D59BB6F8FC16"`.
+  That UUID is the SystemOS APFS volume UUID, read from `APSB` at window offset 18,608,128 and equal
+  to the kernel's default.
+- DadaUfs provides the two transport hooks (`native_verified_block_volume_device`,
+  `native_verified_block_root_authorized`). The lookup matches the IOMedia `UUID` property and returns
+  `/dev/diskN`; the authorization verdict is "authorized" because this build carries no signature
+  policy.
+- `docs/patches/unixnu-owner-cache-bringup.patch` relaxes the build-script gate that otherwise
+  requires `XNU_OWNER_ROOT_TRUST=1`.
+
+The mount helper picks the first existing mount point from `/System/Cryptexes/OS`,
+`/private/preboot/Cryptexes/OS` and `/private/preboot`, and builds `DYLD_SHARED_CACHE_DIR` from it.
+`/System/Cryptexes/OS` and `/private/preboot/Cryptexes/OS` land the volume exactly on the paths the
+kernel already probes (`vm_unix.c` `scdir_path`); `zzzzzzz-dada-cache-path.patch` additionally adds
+`/private/preboot/System/Library/Caches/com.apple.dyld` so the last resort also maps. The volume lookup matches the
+IOMedia `UUID` first and falls back to the SystemOS media size (3,303,014,400 bytes); the device
+number comes from a `/dev/<bsd-name>` lookup. If the mount still fails, `load_init_program()` panics
+with `offline owner SystemOS mount failed: <errno> stage <n> device <path> mount <errno>`:
+
+| Stage | Meaning |
+| --- | --- |
+| 0 | the root device is not authorized |
+| 1 | no SystemOS IOMedia matched the UUID or the size |
+| 3 | the APFS `mount()` call failed; the second errno is its result |
+| 4 | the mount point did not resolve to the new mount |
+| 5/6 | the mounted volume failed the read-only/APFS/device checks |
+
+Common errnos: `ENOENT` (2, mount point missing), `EPERM`/`EAUTH` (1/13), `EINVAL` (22), `ENOTSUP`
+(45). This is a DEVELOPMENT-kernel instrument and bypasses the AMFI/owner-policy path.
+
+The initproc panic also carries the instrument state:
+`initproc failed to start [cache <stage>/<status> <device> p<mask> lib:<names> <src>:<names>]`. A missing suffix means the booted
+kernel is not this build; `[cache 6/0 /dev/...]` means the SystemOS mount and authorization succeeded.
+The hex mask records which cache layout exists under the mount point: bit `1` is
+`System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e`, `2` is
+`System/Library/dyld/dyld_shared_cache_arm64e`, `4` is
+`System/Cryptexes/OS/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e`. `p0` means none of
+the three paths exists, so the file lives elsewhere; the trailing comma-separated names are the first
+directory entries of the mounted volume root, which identify the real layout, and `h<hex>` is the first 24 raw bytes of the readdir buffer so the
+dirent layout can be decoded exactly. The APFS readdir buffer on this build uses the 32-bit entry
+layout (`u32 d_ino, u16 d_reclen, u8 d_type, u8 d_namlen, char d_name[]`), which the listing parser
+now matches. The marker lists `System/Library` as `lib:` and then either `dyld:`
+(`System/Library/dyld`) or `caches:` (`System/Library/Caches/com.apple.dyld`), so the real cache
+file names are visible. `DYLD_SHARED_CACHE_DIR` follows the mask. Launchd got past dyld and failed in
+`sandbox_get_container_expected()`, so `com.apple.security.sandbox` was added to the prelink roots; the
+prelinker then pulled in `com.apple.driver.AppleMobileFileIntegrity` and `com.apple.driver.ApplePMGR`
+as its dependencies (27 components, AMFI and PMGR finally prelinked). The SystemOS volume carries
+`System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e` (plus arm64 and `.01`..`.03`
+fragments), but dyld looks that up under the root, so the mounted-at-a-side-path arrangement cannot
+work. `CONFIG_XNU_OWNER_CACHE_STARTUP=y` and `CONFIG_XNU_OWNER_UNION_SYSTEMOS=y` make the kernel mount
+the cryptex at `/` with `MNT_UNION`, which is how the original system composes the volume and what puts
+the cache on dyld's first search path.
 
 ## Open measurements (in order of need)
 
@@ -317,18 +535,17 @@ screen skips characters below 32 and prints the rest as they are.
 2. **Platform seed** → `--unique-chip-id` (not stored in any repository).
 3. **Trust cache bundles** the board accepts → `[payload] trust_cache_sha256`.
 4. **Root volume UUID** → `[payload.adt] root_match_volume_uuid`.
-5. **UFS bring-up on hardware**: the compatible match and the SM8750 GCC offsets are corrected in this
-   repository's `drivers/NativeUfs` override (`docs/ufs-sm8750.md`), checked by
-   `tests/check_sm8750_facts.py`, and run by the firmware preflight. What is still unverified is the
-   run itself: the kernel now stops at the root mount with `Failed to mount root device`
-   (`IOKitBSDInit.cpp:304`), which is the expected place for it to stop while no transport for this
-   controller exists. The SMMU takeover, the QMP v4 sun PHY state and the ICE configuration are all
-   still assumed rather than observed.
+5. **UFS root path**: the compatible match and the SM8750 GCC offsets are corrected in this
+   repository's `drivers/DadaUfs` fork (`docs/ufs-dada.md`), checked by
+   `drivers/DadaUfs/tests/check_sm8750_facts.py`, and run by the firmware preflight. The transport
+   adopts the controller, reads the whole GPT and publishes the linux window; the root image mounts
+   and launchd execs. What is still unqualified is block verification (owner policy) and the SMMU
+   takeover / QMP v4 sun PHY state / ICE configuration, which remain assumptions.
 6. **`xiaomi,dada` platform expert** in XNU: a `drivers/` module for this board, built against the XNU
-   compile records. `NativeUfs` matches the UFS controller through `ArmDTPlatform`, which is generic.
+   compile records. `DadaUfs` matches the UFS controller through `ArmDTPlatform`, which is generic.
 
 Closed: the GPT `userdata` window, the splash region, and the UFS controller compatible / SM8750 clock
-offsets (see above and `docs/ufs-sm8750.md`).
+offsets (see above and `docs/ufs-dada.md`).
 
 ## UFS
 
@@ -337,11 +554,12 @@ offsets (see above and `docs/ufs-sm8750.md`).
 | Controller | `ufshc@1d84000`, `reg` `0x3000` | stock DT |
 | `compatible` | `qcom,ufshc` (generic only) | stock DT |
 | PHY | `ufsphy_mem@1d80000`, `qcom,ufs-phy-qmp-v4-sun` | stock DT |
-| GCC UFS branches | SM8750 offsets in `drivers/NativeUfs/GccUfs.h` | `gcc-sm8750.c` |
+| GCC UFS branches | SM8750 offsets in `drivers/DadaUfs/GccUfs.h` | `gcc-sm8750.c` |
 
 The stock tree names the controller `qcom,ufshc` alone. The sheng port matched only
-`qcom,sm8550-ufshc`, so the driver never attached to dada. See `docs/ufs-sm8750.md` for the accepted
-names, the eight differing clock offsets, and what is still assumed.
+`qcom,sm8550-ufshc`, so the driver never attached to dada. `DadaUfs` now accepts only `qcom,ufshc` and
+`qcom,sm8750-ufshc`; see `docs/ufs-dada.md` for the accepted names, the SM8750 clock offsets and what
+is still assumed.
 
 Reads are served without owner verification for this first boot: `NATIVE_VERIFIED_BLOCK` is not defined,
 so `NativeUfsBlock::start()` returns `true` instead of `configureVerification()`. With the macro defined

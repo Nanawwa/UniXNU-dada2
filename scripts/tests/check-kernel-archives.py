@@ -9,9 +9,10 @@ checked here instead:
      and fails on a missing one);
   2. the builders put their object in the directory the kernel script reads, so the archive it tests for
      is the archive that gets made;
-  3. build-arm-driver.py compiles NativeUfs without NATIVE_VERIFIED_BLOCK unless --verified-root is
+  3. build-arm-driver.py compiles DadaUfs without NATIVE_VERIFIED_BLOCK unless --verified-root is
      given. Verified block mode refuses to publish the device without an owner-signed policy bundle
      ("policy count invalid"), and this port has no bundle, so the default must be the plain read path.
+  4. the storage binding builder still takes the prelink slide and only rebases kext-owned slots.
 
 Check 3 runs the real builder against a synthetic compile record, so it exercises the argument guards and
 the emitted command line without Xcode. Exit status is 0 when every check passes.
@@ -33,17 +34,16 @@ DEVICE = HERE.parents[2]
 # CONFIG_XNU_<NAME> -> the archive build-xnu-4k-baseline.sh demands when it is 1, and the builder that makes it.
 ARCHIVES = {
     'XNU_SOURCE_CORECRYPTO14': ('build/corecrypto-2023/libcorecrypto_kernel_noasm-namespaced.a',
-                                ('build-corecrypto-14.py', None)),
+                                ('script', 'build-corecrypto-14.py')),
     'XNU_SOURCE_PTHREAD': ('build/libpthread-kernel/libpthread_kernel.a',
-                           ('build-libpthread-kernel.py', None)),
-    'XNU_ARM_DT_PLATFORM': ('build/armdt-platform/libArmDTPlatform.a',
-                            ('build-arm-driver.py', 'ArmDTPlatform')),
-    'XNU_ARMCPU': ('build/armcpu/libArmCpu.a', ('build-arm-driver.py', 'ArmCpu')),
-    'XNU_NATIVE_UFS': ('build/native-ufs/libNativeUfs.a', ('build-arm-driver.py', 'NativeUfs')),
-    'XNU_NATIVE_AES': ('build/native-aes/libNativeAES.a', ('build-arm-driver.py', 'NativeAES')),
-    'XNU_BOOT_PROGRESS': ('build/boot-progress/libBootProgress.a', ('build-boot-progress.py', None)),
+                           ('script', 'build-libpthread-kernel.py')),
+    'XNU_ARM_DT_PLATFORM': ('build/armdt-platform/libArmDTPlatform.a', ('component', 'ArmDTPlatform')),
+    'XNU_ARMCPU': ('build/armcpu/libArmCpu.a', ('component', 'ArmCpu')),
+    'XNU_NATIVE_UFS': ('build/dada-ufs/libDadaUfs.a', ('component', 'DadaUfs')),
+    'XNU_NATIVE_AES': ('build/software-aes/libSoftwareAES.a', ('component', 'SoftwareAES')),
+    'XNU_BOOT_PROGRESS': ('build/boot-progress/libBootProgress.a', ('script', 'build-boot-progress.py')),
     'XNU_NATIVE_LEGACY_DISPLAY': ('build/native-legacy-display/libNativeLegacyDisplay.late.a',
-                                  ('build-native-legacy-display.py', None)),
+                                  ('script', 'build-native-legacy-display.py')),
 }
 
 failures = []
@@ -60,12 +60,12 @@ passes = []
 # So the transport needs two things instead of a linked base class:
 #   - build-storage-classes.py compiles the pinned reference object, which names the 190 dispatch slots;
 #   - build-storage-kext-bindings.py rebinds the transport's imports to the prelinked kext's own
-#     addresses, and rebuilds libNativeUfs.a around the bound object.
-# Neither is needed in probe-only mode, where the transport has no block-device half at all.
+#     addresses, and rebuilds libDadaUfs.a around the bound object.
+# Both are needed whenever the transport carries its block-device half.
 REQUIRED_TOGETHER = (
-    ('XNU_NATIVE_UFS', (('build-storage-classes.py', None),
-                        ('build-storage-kext-bindings.py', None)),
-     'build/native-ufs/libNativeUfs.a', 'XNU_NATIVE_UFS_PROBE_ONLY'),
+    ('XNU_NATIVE_UFS', (('script', 'build-storage-classes.py'),
+                        ('script', 'build-storage-kext-bindings.py')),
+     'build/dada-ufs/libDadaUfs.a'),
 )
 
 
@@ -91,55 +91,81 @@ def check_archives(device, tree):
     entries = board.get('kernel', {}).get('archives')
     if not check(isinstance(entries, list) and entries, 'board.toml: [kernel] archives is a non-empty list'):
         return
-    listed = set()
+    selected, scripts = set(), set()
     for entry in entries:
         parts = entry.split()
-        listed.add((parts[0], parts[1] if len(parts) > 1 and not parts[1].startswith('-') else None))
+        if parts[0].startswith('component:'):
+            selected.add(parts[0].split(':', 1)[1])
+        else:
+            scripts.add(parts[0])
 
     switches = defconfig_switches(device / 'configs' / board['kernel']['defconfig'])
     script = (tree / 'scripts/build-xnu-4k-baseline.sh').read_text() if tree else ''
     for name, (archive, builder) in ARCHIVES.items():
         value = switches.get(name, 'n')
         enabled = value == 'y'
-        has_builder = builder in listed
+        kind, identifier = builder
+        has_builder = identifier in (selected if kind == 'component' else scripts)
         if enabled:
-            check(has_builder, f'{name}=y has a builder ({builder[0]} {builder[1] or ""})'.replace('  ', ' '))
+            check(has_builder, f'{name}=y selects {kind} {identifier}')
             if script:
-                check(archive in script, f'{name} archive {archive} is the one the kernel script reads')
+                overrides = {value.replace('{tree}/', '') for key, value in switches.items()
+                             if key.endswith('_ARCHIVE')}
+                check(archive in script or archive in overrides,
+                      f'{name} archive {archive} is the one the kernel script reads')
         else:
-            check(not has_builder, f'{name}=n lists no builder')
+            check(not has_builder, f'{name}=n selects no {kind} {identifier}')
 
-    # Some archives exist only to supply symbols a selected one needs. The storage transports derive from
-    # IOBlockStorageDevice, which is a class of Apple's separate IOStorageFamily project rather than of the
-    # xnu tree, so a kernel that links a transport needs the base class compiled and linked before it --
-    # otherwise the link stops with "vtable for IOBlockStorageDevice" undefined. A builder listed here must
-    # be present exactly when its switch is on, and the kernel script must read that archive.
-    for switch, builders, archive, *off in REQUIRED_TOGETHER:
+    # Some archives exist only to supply symbols a selected one needs. The storage transport derives
+    # from IOBlockStorageDevice, a class of Apple's separate IOStorageFamily project, so the kernel
+    # must carry the pinned reference shape and the kext bindings whenever the transport is linked.
+    for switch, builders, archive in REQUIRED_TOGETHER:
         needed = switches.get(switch, 'n') == 'y'
-        if off and switches.get(off[0], 'n') == 'y':
-            needed = False
-        for builder in builders:
-            check((builder in listed) == needed,
-                  f'{switch}={"y" if needed else "n"} lists {builder[0]} {"and" if needed else "only when it does not"} '
-                  f'needs it')
+        for kind, identifier in builders:
+            present = identifier in (selected if kind == 'component' else scripts)
+            check(present == needed,
+                  f'{switch}={"y" if needed else "n"} lists {kind} {identifier} '
+                  f'{"and needs it" if needed else "only when it does not need it"}')
         if needed and script:
-            check(archive in script, f'{switch}=y links {archive}')
+            overrides = {value.replace('{tree}/', '') for key, value in switches.items()
+                         if key.endswith('_ARCHIVE')}
+            check(archive in script or archive in overrides, f'{switch}=y links {archive}')
 
 
-def check_products(device, builder):
-    """The object directory of each component must be the one build-xnu-4k-baseline.sh reads."""
-    text = builder.read_text()
-    start = text.index("out = ROOT / 'build' / {")
-    directory = dict(re.findall(r"'(\w+)':\s*'([\w-]+)'", text[start:text.index('}[component]', start)]))
-    for component, archive in (('ArmDTPlatform', 'build/armdt-platform/libArmDTPlatform.a'),
-                               ('ArmCpu', 'build/armcpu/libArmCpu.a'),
-                               ('NativeAES', 'build/native-aes/libNativeAES.a'),
-                               ('NativeUfs', 'build/native-ufs/libNativeUfs.a')):
-        made = f"build/{directory.get(component)}/lib{component}.a"
-        check(made == archive, f'{component} builds {archive} (mapping says {made})')
+def check_products(device, tree):
+    """Each selected kernel component must build the archive the kernel script reads."""
+    catalog_path = find_catalog(device, tree)
+    if not check(catalog_path is not None, 'components.toml is available for the product check'):
+        return
+    specs = {entry['id']: entry for entry in tomllib.loads(catalog_path.read_text())['component']}
+    script = (tree / 'scripts/build-xnu-4k-baseline.sh').read_text() if tree else ''
+    board = tomllib.load((device / 'board.toml').open('rb'))
+    switches = defconfig_switches(device / 'configs' / board['kernel']['defconfig'])
+    overrides = {value.replace('{tree}/', '') for key, value in switches.items() if key.endswith('_ARCHIVE')}
+    expected = {
+        'ArmDTPlatform': 'build/armdt-platform/libArmDTPlatform.a',
+        'ArmCpu': 'build/armcpu/libArmCpu.a',
+        'SoftwareAES': 'build/software-aes/libSoftwareAES.a',
+        'DadaUfs': 'build/dada-ufs/libDadaUfs.a',
+        'VirtioMmioBlock': 'build/virtio-mmio-block/libVirtioMmioBlock.a',
+    }
+    for identifier, archive in expected.items():
+        spec = specs.get(identifier, {})
+        outputs = [path for path in spec.get('outputs', []) if path.endswith('.a')]
+        check(archive in outputs, f'{identifier} catalog output is {archive} (got {outputs})')
+        build = spec.get('build', [])
+        check(build[:2] == ['build-arm-driver.py', identifier],
+              f'{identifier} is built by build-arm-driver.py {identifier} (got {build})')
+        if script:
+            check(archive in script or archive in overrides, f'{identifier} links {archive}')
 
 
-def make_fixture(root, builder):
+def find_catalog(device, tree):
+    candidates = ([tree] if tree else []) + [device.parent / 'UniXNU', device, Path.cwd()]
+    return next((base / 'components.toml' for base in candidates if (base / 'components.toml').is_file()), None)
+
+
+def make_fixture(root, builder, catalog_path):
     """A build tree just big enough for build-arm-driver.py to emit a command line.
 
     The compiler and xcrun are stubs, so this runs on any host: the check is about which macros and output
@@ -148,15 +174,17 @@ def make_fixture(root, builder):
     """
     (root / 'scripts').mkdir(parents=True)
     shutil.copy2(builder, root / 'scripts/build-arm-driver.py')
+    # The builder resolves component paths, source filenames and output directories from the catalog.
+    shutil.copy2(catalog_path, root / 'components.toml')
+    specs = {entry['id']: entry for entry in tomllib.loads(catalog_path.read_text())['component']}
     bin_dir = root / 'stub-bin'
     bin_dir.mkdir()
 
     clang = bin_dir / 'clang'
-    # A compiler that behaves like the one CI actually resolves: upstream clang, which has no
+    # A compiler that behaves like the one CI resolves: upstream clang, which has no
     # -Wunnecessary-virtual-specifier (an Apple-only option). Like the real one it reports an unknown
     # -Wno- option as an error when -Werror is in effect, and stays quiet when the command also says
-    # -Wno-unknown-warning-option. Without that behaviour the fixture would accept any flag and this check
-    # could never notice a flag the compiler does not know.
+    # -Wno-unknown-warning-option.
     clang.write_text('#!/usr/bin/env python3\n'
                      'import struct, sys\n'
                      'arguments = sys.argv[1:]\n'
@@ -189,11 +217,12 @@ def make_fixture(root, builder):
     json.dump({'directory': str(record.parent), 'file': str(source),
                'arguments': [str(clang), '-c', str(source), '-o', 'IOPlatformExpert.o', '-I', str(source.parent)]},
               record.open('w'))
-    for component in ('NativeUfs', 'NativeAES', 'NativeVirtioBlock', 'ArmCpu'):
-        (root / 'drivers' / component).mkdir(parents=True)
-        (root / 'drivers' / component / f'{component}.cpp').write_text(f'int {component};\n')
-    for directory in ('kits/VerifiedRoot/include', 'drivers/NativeVirtioBlock', 'build/storage-abi/include',
-                      '.cache/xnu-work/osfmk'):
+    for identifier in ('DadaUfs', 'SoftwareAES', 'VirtioMmioBlock', 'ArmCpu', 'ArmDTPlatform'):
+        spec = specs.get(identifier, {})
+        name = next((item for item in spec.get('source_files', []) if item.endswith('.cpp')), identifier + '.cpp')
+        (root / 'drivers' / identifier).mkdir(parents=True)
+        (root / 'drivers' / identifier / name).write_text(f'int {identifier};\n')
+    for directory in ('kits/VerifiedRoot/include', 'build/storage-abi/include', '.cache/xnu-work/osfmk'):
         (root / directory).mkdir(parents=True, exist_ok=True)
 
 
@@ -215,54 +244,47 @@ def emitted_command(root, directory):
     return record.read_text() if record.is_file() else ''
 
 
-def check_verified_mode(builder):
+def check_verified_mode(builder, catalog_path):
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        make_fixture(root, builder)
+        make_fixture(root, builder, catalog_path)
 
-        result = run_builder(root, 'NativeUfs')
-        check(result.returncode == 0, f"build-arm-driver.py NativeUfs runs (exit {result.returncode})")
-        defines = emitted_defines(root, 'native-ufs')
-        check(not defines, f'NativeUfs without --verified-root defines no verified block macro (got {sorted(defines)})')
-        check(not (root / 'build/native-virtio-block-verified').exists(),
-              'NativeUfs keeps its own output directory (build/native-ufs)')
-        # NativeUfs includes <IOKit/storage/IOBlockStorageDevice.h>, which the xnu headers do not carry: the
+        result = run_builder(root, 'DadaUfs')
+        check(result.returncode == 0, f'build-arm-driver.py DadaUfs runs (exit {result.returncode})')
+        defines = emitted_defines(root, 'dada-ufs')
+        check(not defines, f'DadaUfs without --verified-root defines no verified block macro (got {sorted(defines)})')
+        check((root / 'build/dada-ufs').is_dir(),
+              'DadaUfs keeps its own output directory (build/dada-ufs)')
+        check((root / 'build/dada-ufs/libDadaUfs.a').is_file(),
+              'DadaUfs builds build/dada-ufs/libDadaUfs.a, the archive the kernel script links')
+        # DadaUfs includes <IOKit/storage/IOBlockStorageDevice.h>, which the xnu headers do not carry: the
         # build tree stages the public IOStorageFamily headers in build/storage-abi/include (the base
         # scripts/unixnu/kernel.py does it before the archive builders) and the command line must point there.
         storage = str(root / 'build/storage-abi/include')
-        command = json.loads(emitted_command(root, 'native-ufs'))
+        command = json.loads(emitted_command(root, 'dada-ufs'))
         check(any(a == '-I' and b == storage for a, b in zip(command, command[1:])),
-              'NativeUfs compiles with the staged IOStorageFamily include directory')
+              'DadaUfs compiles with the staged IOStorageFamily include directory')
 
-        # The probe-only transport has no block-device half, so it must not pull in Apple's
-        # IOStorageFamily headers at all: the base class is not built into the kernel in that mode
-        # (the kernelcache's own kext keeps the class name), and the driver must link without it.
-        result = run_builder(root, 'NativeUfs', '--probe-only')
-        command = json.loads(emitted_command(root, 'native-ufs'))
-        check(result.returncode == 0 and '-DXNU_NATIVE_UFS_PROBE_ONLY=1' in command
-              and not any(a == '-I' and b == storage for a, b in zip(command, command[1:])),
-              'NativeUfs --probe-only compiles without the IOStorageFamily include directory')
-
-        result = run_builder(root, 'NativeUfs', '--verified-root')
-        defines = emitted_defines(root, 'native-ufs')
+        result = run_builder(root, 'DadaUfs', '--verified-root')
+        defines = emitted_defines(root, 'dada-ufs')
         check(result.returncode == 0 and '-DNATIVE_VERIFIED_BLOCK=1' in defines,
-              f'NativeUfs --verified-root defines the verified block macro (got {sorted(defines)})')
+              f'DadaUfs --verified-root defines the verified block macro (got {sorted(defines)})')
 
-        result = run_builder(root, 'NativeUfs', '--verified-root', '--verified-root-bundle')
-        defines = emitted_defines(root, 'native-ufs')
+        result = run_builder(root, 'DadaUfs', '--verified-root', '--verified-root-bundle')
+        defines = emitted_defines(root, 'dada-ufs')
         check(result.returncode == 0 and '-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1' in defines,
-              f'NativeUfs --verified-root-bundle defines the bundle macro (got {sorted(defines)})')
+              f'DadaUfs --verified-root-bundle defines the bundle macro (got {sorted(defines)})')
 
-        # The virtio transport is the original owner of the verified qualification directories.
-        result = run_builder(root, 'NativeVirtioBlock', '--verified-root')
-        check(result.returncode == 0 and (root / 'build/native-virtio-block-verified').is_dir(),
-              'NativeVirtioBlock --verified-root still writes build/native-virtio-block-verified')
+        # The virtio transport owns the verified qualification directories.
+        result = run_builder(root, 'VirtioMmioBlock', '--verified-root')
+        check(result.returncode == 0 and (root / 'build/virtio-mmio-block-verified').is_dir(),
+              'VirtioMmioBlock --verified-root writes build/virtio-mmio-block-verified')
 
         # Guards that existed before this port and must not have been relaxed.
-        result = run_builder(root, 'NativeAES', '--verified-root')
+        result = run_builder(root, 'SoftwareAES', '--verified-root')
         check(result.returncode != 0 and 'read-only block transport' in result.stderr,
               'a non-storage component still refuses --verified-root')
-        result = run_builder(root, 'NativeUfs', '--verified-root-bundle')
+        result = run_builder(root, 'DadaUfs', '--verified-root-bundle')
         check(result.returncode != 0 and 'requires verified block mode' in result.stderr,
               'a bundle still requires --verified-root')
 
@@ -391,7 +413,7 @@ def check_unverified_visibility(source, lines, relative):
                       f'the plain build would then carry a UUID matcher it has no policy for')
 
 
-def check_binding_slide(device):
+def check_binding_slide(device, tree=None):
     """The storage bindings must take the prelink slide, and must only move the kext's own addresses.
 
     build-storage-kext-bindings.py reads the original kernelcache, but the transport is linked into the
@@ -402,9 +424,11 @@ def check_binding_slide(device):
 
     These are source properties (no kernelcache and no Xcode needed), which is why they can be checked here.
     """
-    script = device.parent / 'UniXNU/scripts/build-storage-kext-bindings.py'
-    if not script.is_file():
-        # A checkout that only has the device repository: the base tree is not next to it.
+    candidates = ([tree] if tree else []) + [device, device.parent / 'UniXNU']
+    script = next((base / 'scripts/build-storage-kext-bindings.py' for base in candidates
+                   if (base / 'scripts/build-storage-kext-bindings.py').is_file()), None)
+    if script is None:
+        # A checkout that only has the base repository: the board builder is not next to it.
         return
     text = script.read_text()
     check("'--slide'" in text or '--slide' in text,
@@ -473,10 +497,12 @@ def main():
             tree = candidate
 
     check_archives(device, tree)
-    check_products(device, builder)
-    check_verified_mode(builder)
+    check_products(device, tree)
+    catalog = find_catalog(device, tree)
+    if check(catalog is not None, 'components.toml is available for the builder checks'):
+        check_verified_mode(builder, catalog)
     check_verified_symbols(device)
-    check_binding_slide(device)
+    check_binding_slide(device, tree)
     return report()
 
 
