@@ -1,5 +1,3 @@
-native-smp-secondary.patch
-zzzz-dada-skip-entitlement-acceleration-without-amfi.patch
 zzzz-dada-skip-root-auth-gate-without-owner-audit.patch
 zzzzz-dada-entitlements-without-amfi.patch
 zzzzzz-dada-more-amfi-null-guards.patch
