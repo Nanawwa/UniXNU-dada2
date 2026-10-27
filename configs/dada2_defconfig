@@ -35,7 +35,7 @@ CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_UFS=y
 # The board's own transport archive; build-xnu-4k-baseline.sh honours this override instead of the
 # upstream ShengUfs path its default names.
-CONFIG_XNU_NATIVE_UFS_ARCHIVE="{tree}/build/dada-ufs/libDadaUfs.a"
+CONFIG_XNU_NATIVE_UFS_ARCHIVE="{tree}/build/dada2-ufs/libDadaUfs2.a"
 CONFIG_XNU_NATIVE_AES=y
 # The trust cache runtime is off. The port patch native-trust-cache-runtime.patch compiles
 # trust_cache_runtime_init() into the boot only when XNU_NATIVE_TRUST_CACHE is 1, and that function
@@ -66,7 +66,7 @@ CONFIG_XNU_DT_PANIC_REGION=y
 # cache. This is the bring-up substitution for the AMFI-gated cryptex mount; the transport reports the
 # volume as authorized (no signature policy). The UUID is the SystemOS APFS volume UUID of 21H461.
 CONFIG_XNU_NATIVE_RAM_BLOCK=y
-CONFIG_XNU_DADA_BOOT_LOG=y
+CONFIG_XNU_DADA2_BOOT_LOG=y
 CONFIG_XNU_OWNER_DATA_MOUNT=y
 CONFIG_XNU_OWNER_BOOT_MANIFEST=y
 CONFIG_XNU_OWNER_DATA_VOLUME_UUID="BA3B9FFA-0E35-4DE1-B942-E291D7BD5B52"

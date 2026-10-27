@@ -7,12 +7,12 @@
 schema_version = 2
 
 [board]
-name = "dada"
+name = "dada2"
 soc = "SM8750"
 soc_source = "sm8750"
 os_profile = "ipados-17.7.11-21H461"
-description = "Xiaomi 15"
-kit = "dada"
+description = "Redmi K80 Pro"
+kit = "dada2"
 example = false
 
 [components]
@@ -22,7 +22,7 @@ example = false
 # VirtioMmioConsole) are generic components kept for later subsystems; the
 # sheng-only GPU and touch checkouts were removed with the board fork.
 # porting.toml records each area.
-include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "DadaUfs", "RamBlock", "XnuPrelink", "DarwinBoot"]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "DadaUfs2", "RamBlock", "XnuPrelink", "DarwinBoot"]
 
 [userdata]
 # GPT entry "linux" on LUN 0. /sys/class/block/sda36 reports start=808593408 and
@@ -38,7 +38,7 @@ windows = [
 ]
 
 [kernel]
-defconfig = "dada_defconfig"
+defconfig = "dada2_defconfig"
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8750.config", "os:configs/ipados.config"]
 patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
 # Ordered archive plan. The storage transport needs the pinned
@@ -55,11 +55,11 @@ archives = [
   "build-software-aes-bindings.py",
   "build-libpthread-kernel.py",
   "build-storage-classes.py",
-  "component:DadaUfs",
-"build-dada-platform-power.py",
-  "build-storage-kext-bindings.py --component DadaUfs",
-  "build-dada-ram-block.py",
-  "build-dada-boot-log.py",
+  "component:DadaUfs2",
+"build-dada2-platform-power.py",
+  "build-storage-kext-bindings.py --component DadaUfs2",
+  "build-dada2-ram-block.py",
+  "build-dada2-boot-log.py",
 ]
 
 [kernel.prelink]
@@ -99,14 +99,14 @@ roots = [
 ]
 
 [device_tree]
-source = "device:dts/dada.dts"
+source = "device:dts/dada2.dts"
 include_dirs = ["soc:dts"]
 
 [firmware]
-config = "dada"
-dsc = "Platforms/Xiaomi/dadaPkg/dada.dsc"
-fd = "Build/dadaPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-preflight = ["scripts/check-dada.py"]
+config = "dada2"
+dsc = "Platforms/Xiaomi/dada2Pkg/dada2.dsc"
+fd = "Build/dada2Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+preflight = ["scripts/check-dada2.py"]
 # The vendor binaries (Binaries/Device-Binaries, branch dada) and the trees the
 # DSC needs.
 submodules = [
@@ -141,10 +141,10 @@ ENABLE_SECUREBOOT = "0"
 DEVICE_MODEL = "0"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
-BUILDID_STRING = "dada-research"
+BUILDID_STRING = "dada2-research"
 
 [payload]
-volume = "DADAESP"
+volume = "DADA2ESP"
 size_mib = 192
 loader = "firmware"
 title = "dada first boot: source 4K XNU to console"
@@ -188,7 +188,7 @@ unique_chip_id = "required"
 amfi-only-platform-code = 0
 
 [adt.product.string]
-model = "xiaomi,dada"
+model = "xiaomi,dada2"
 
 [adt.product.u32]
 thin-bezel = 1

@@ -9,7 +9,7 @@ checked here instead:
      and fails on a missing one);
   2. the builders put their object in the directory the kernel script reads, so the archive it tests for
      is the archive that gets made;
-  3. build-arm-driver.py compiles DadaUfs without NATIVE_VERIFIED_BLOCK unless --verified-root is
+  3. build-arm-driver.py compiles DadaUfs2 without NATIVE_VERIFIED_BLOCK unless --verified-root is
      given. Verified block mode refuses to publish the device without an owner-signed policy bundle
      ("policy count invalid"), and this port has no bundle, so the default must be the plain read path.
   4. the storage binding builder still takes the prelink slide and only rebases kext-owned slots.
@@ -39,7 +39,7 @@ ARCHIVES = {
                            ('script', 'build-libpthread-kernel.py')),
     'XNU_ARM_DT_PLATFORM': ('build/armdt-platform/libArmDTPlatform.a', ('component', 'ArmDTPlatform')),
     'XNU_ARMCPU': ('build/armcpu/libArmCpu.a', ('component', 'ArmCpu')),
-    'XNU_NATIVE_UFS': ('build/dada-ufs/libDadaUfs.a', ('component', 'DadaUfs')),
+    'XNU_NATIVE_UFS': ('build/dada2-ufs/libDadaUfs2.a', ('component', 'DadaUfs2')),
     'XNU_NATIVE_AES': ('build/software-aes/libSoftwareAES.a', ('component', 'SoftwareAES')),
     'XNU_BOOT_PROGRESS': ('build/boot-progress/libBootProgress.a', ('script', 'build-boot-progress.py')),
     'XNU_NATIVE_LEGACY_DISPLAY': ('build/native-legacy-display/libNativeLegacyDisplay.late.a',
@@ -60,12 +60,12 @@ passes = []
 # So the transport needs two things instead of a linked base class:
 #   - build-storage-classes.py compiles the pinned reference object, which names the 190 dispatch slots;
 #   - build-storage-kext-bindings.py rebinds the transport's imports to the prelinked kext's own
-#     addresses, and rebuilds libDadaUfs.a around the bound object.
+#     addresses, and rebuilds libDadaUfs2.a around the bound object.
 # Both are needed whenever the transport carries its block-device half.
 REQUIRED_TOGETHER = (
     ('XNU_NATIVE_UFS', (('script', 'build-storage-classes.py'),
                         ('script', 'build-storage-kext-bindings.py')),
-     'build/dada-ufs/libDadaUfs.a'),
+     'build/dada2-ufs/libDadaUfs2.a'),
 )
 
 
@@ -146,7 +146,7 @@ def check_products(device, tree):
         'ArmDTPlatform': 'build/armdt-platform/libArmDTPlatform.a',
         'ArmCpu': 'build/armcpu/libArmCpu.a',
         'SoftwareAES': 'build/software-aes/libSoftwareAES.a',
-        'DadaUfs': 'build/dada-ufs/libDadaUfs.a',
+        'DadaUfs2': 'build/dada2-ufs/libDadaUfs2.a',
         'VirtioMmioBlock': 'build/virtio-mmio-block/libVirtioMmioBlock.a',
     }
     for identifier, archive in expected.items():
@@ -217,7 +217,7 @@ def make_fixture(root, builder, catalog_path):
     json.dump({'directory': str(record.parent), 'file': str(source),
                'arguments': [str(clang), '-c', str(source), '-o', 'IOPlatformExpert.o', '-I', str(source.parent)]},
               record.open('w'))
-    for identifier in ('DadaUfs', 'SoftwareAES', 'VirtioMmioBlock', 'ArmCpu', 'ArmDTPlatform'):
+    for identifier in ('DadaUfs2', 'SoftwareAES', 'VirtioMmioBlock', 'ArmCpu', 'ArmDTPlatform'):
         spec = specs.get(identifier, {})
         name = next((item for item in spec.get('source_files', []) if item.endswith('.cpp')), identifier + '.cpp')
         (root / 'drivers' / identifier).mkdir(parents=True)
@@ -249,31 +249,31 @@ def check_verified_mode(builder, catalog_path):
         root = Path(temporary)
         make_fixture(root, builder, catalog_path)
 
-        result = run_builder(root, 'DadaUfs')
-        check(result.returncode == 0, f'build-arm-driver.py DadaUfs runs (exit {result.returncode})')
-        defines = emitted_defines(root, 'dada-ufs')
-        check(not defines, f'DadaUfs without --verified-root defines no verified block macro (got {sorted(defines)})')
-        check((root / 'build/dada-ufs').is_dir(),
-              'DadaUfs keeps its own output directory (build/dada-ufs)')
-        check((root / 'build/dada-ufs/libDadaUfs.a').is_file(),
-              'DadaUfs builds build/dada-ufs/libDadaUfs.a, the archive the kernel script links')
-        # DadaUfs includes <IOKit/storage/IOBlockStorageDevice.h>, which the xnu headers do not carry: the
+        result = run_builder(root, 'DadaUfs2')
+        check(result.returncode == 0, f'build-arm-driver.py DadaUfs2 runs (exit {result.returncode})')
+        defines = emitted_defines(root, 'dada2-ufs')
+        check(not defines, f'DadaUfs2 without --verified-root defines no verified block macro (got {sorted(defines)})')
+        check((root / 'build/dada2-ufs').is_dir(),
+              'DadaUfs2 keeps its own output directory (build/dada2-ufs)')
+        check((root / 'build/dada2-ufs/libDadaUfs2.a').is_file(),
+              'DadaUfs2 builds build/dada2-ufs/libDadaUfs2.a, the archive the kernel script links')
+        # DadaUfs2 includes <IOKit/storage/IOBlockStorageDevice.h>, which the xnu headers do not carry: the
         # build tree stages the public IOStorageFamily headers in build/storage-abi/include (the base
         # scripts/unixnu/kernel.py does it before the archive builders) and the command line must point there.
         storage = str(root / 'build/storage-abi/include')
-        command = json.loads(emitted_command(root, 'dada-ufs'))
+        command = json.loads(emitted_command(root, 'dada2-ufs'))
         check(any(a == '-I' and b == storage for a, b in zip(command, command[1:])),
-              'DadaUfs compiles with the staged IOStorageFamily include directory')
+              'DadaUfs2 compiles with the staged IOStorageFamily include directory')
 
-        result = run_builder(root, 'DadaUfs', '--verified-root')
-        defines = emitted_defines(root, 'dada-ufs')
+        result = run_builder(root, 'DadaUfs2', '--verified-root')
+        defines = emitted_defines(root, 'dada2-ufs')
         check(result.returncode == 0 and '-DNATIVE_VERIFIED_BLOCK=1' in defines,
-              f'DadaUfs --verified-root defines the verified block macro (got {sorted(defines)})')
+              f'DadaUfs2 --verified-root defines the verified block macro (got {sorted(defines)})')
 
-        result = run_builder(root, 'DadaUfs', '--verified-root', '--verified-root-bundle')
-        defines = emitted_defines(root, 'dada-ufs')
+        result = run_builder(root, 'DadaUfs2', '--verified-root', '--verified-root-bundle')
+        defines = emitted_defines(root, 'dada2-ufs')
         check(result.returncode == 0 and '-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1' in defines,
-              f'DadaUfs --verified-root-bundle defines the bundle macro (got {sorted(defines)})')
+              f'DadaUfs2 --verified-root-bundle defines the bundle macro (got {sorted(defines)})')
 
         # The virtio transport owns the verified qualification directories.
         result = run_builder(root, 'VirtioMmioBlock', '--verified-root')
@@ -284,7 +284,7 @@ def check_verified_mode(builder, catalog_path):
         result = run_builder(root, 'SoftwareAES', '--verified-root')
         check(result.returncode != 0 and 'read-only block transport' in result.stderr,
               'a non-storage component still refuses --verified-root')
-        result = run_builder(root, 'DadaUfs', '--verified-root-bundle')
+        result = run_builder(root, 'DadaUfs2', '--verified-root-bundle')
         check(result.returncode != 0 and 'requires verified block mode' in result.stderr,
               'a bundle still requires --verified-root')
 

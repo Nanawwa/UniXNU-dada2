@@ -267,7 +267,7 @@ def main():
     parser.add_argument('--kernelcache', type=Path,
                         help='the original kernelcache the board is qualified against '
                              '(default: resolve it from board.toml [ipsw], as the prelink step does)')
-    parser.add_argument('--component', default='DadaUfs',
+    parser.add_argument('--component', default='DadaUfs2',
                         help='canonical transport component ID (or its legacy name)')
     parser.add_argument('--class', dest='class_name', help='transport runtime class name (default: <runtime name>Block)')
     parser.add_argument('--directory', type=Path,
@@ -297,7 +297,7 @@ def main():
     runtime = spec.get('legacy_name', canonical)
     class_name = args.class_name or spec.get('runtime_class') or (runtime + 'Block')
     default_directory = (Path(archive_output).parent if archive_output
-                         else Path('build') / ('dada-ufs' if canonical in ('DadaUfs', 'ShengUfs')
+                         else Path('build') / ('dada2-ufs' if canonical in ('DadaUfs2', 'ShengUfs')
                                               else 'native-' + canonical.lower()))
     directory = (args.directory or ROOT / default_directory).resolve()
     object_path = (args.object or directory / ((Path(source).stem if source else runtime) + '.o')).resolve()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage the public IOStorageFamily headers the storage transports compile against.
 
-The storage transports (DadaUfs, VirtioMmioBlock, RamBlock) include
+The storage transports (DadaUfs2, VirtioMmioBlock, RamBlock) include
 <IOKit/storage/IOBlockStorageDevice.h>. That header is not part of the xnu source tree: the storage classes
 live in Apple's separate IOStorageFamily project, and the target kernelcache carries the original kext. The
 headers here are the public Darwin 23 originals, staged where the archive builders already look

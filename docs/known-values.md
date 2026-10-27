@@ -195,7 +195,7 @@ for a neutral first-boot tree, or replace it with a phone identity when one is c
 
 ## Kernel build: what is selected, and why
 
-`configs/dada_defconfig` starts from the sheng reference and keeps only what the first boot needs. The
+`configs/dada2_defconfig` starts from the sheng reference and keeps only what the first boot needs. The
 archive builders in `board.toml [kernel] archives` are exactly the ones those switches require;
 `scripts/build-xnu-4k-baseline.sh` links each with `-Wl,-force_load` and fails on a missing archive.
 

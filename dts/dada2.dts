@@ -8,8 +8,8 @@
 /include/ "sm8750.dtsi"
 
 / {
-    model = "Xiaomi 15";
-    compatible = "xiaomi,dada", "qcom,sm8750";
+    model = "Redmi K80 Pro";
+    compatible = "xiaomi,dada2", "qcom,sm8750";
     #address-cells = <2>;
     #size-cells = <2>;
 

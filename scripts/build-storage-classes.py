@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile the IOStorageFamily base class the storage transports inherit from.
 
-The storage transports (drivers/DadaUfs, drivers/VirtioMmioBlock) are subclasses of
+The storage transports (drivers/DadaUfs2, drivers/VirtioMmioBlock) are subclasses of
 IOBlockStorageDevice. That class is not part of the xnu source tree: it lives in Apple's separate
 IOStorageFamily project, and the public headers are staged into build/storage-abi/include so the
 transports can compile against them. A header alone is not enough at link time, though -- a subclass
@@ -10,9 +10,9 @@ Mach-O with no dynamic lookup:
 
     Undefined symbols for architecture arm64:
       "IOBlockStorageDevice::gMetaClass", referenced from:
-          NativeUfsBlock::MetaClass::MetaClass() in libDadaUfs.a(DadaUfs.o)
+          NativeUfsBlock::MetaClass::MetaClass() in libDadaUfs2.a(DadaUfs2.o)
       "vtable for IOBlockStorageDevice", referenced from:
-          NativeUfsBlock::start(IOService*) in libDadaUfs.a(DadaUfs.o)
+          NativeUfsBlock::start(IOService*) in libDadaUfs2.a(DadaUfs2.o)
 
 So the base class itself is compiled from the same pinned IOStorageFamily revision the headers come
 from, and linked into the kernel by board.toml [kernel] archives.

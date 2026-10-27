@@ -27,7 +27,7 @@ if args.verified_root_bundle and not args.verified_root:
     parser.error('A policy bundle requires verified block mode')
 if args.verified_root_bundle and args.negative_verified_block:
     parser.error('Select either bundle policy qualification or the isolated DMA snapshot fault')
-if (args.verified_root or args.negative_verified_block) and args.component not in ('NativeVirtioBlock', 'NativeUfs', 'DadaUfs'):
+if (args.verified_root or args.negative_verified_block) and args.component not in ('NativeVirtioBlock', 'NativeUfs', 'DadaUfs2'):
     parser.error('Verified block mode requires a concrete read-only block transport')
 if args.negative_verified_block and not args.verified_root:
     parser.error('The isolated input fault requires verified block mode')
@@ -81,7 +81,7 @@ while index < len(arguments):
 command.extend(['-Wall', '-Wextra', '-Werror', '-Wno-unknown-warning-option', '-Wno-unused-parameter',
                 '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
                 '-Wno-unnecessary-virtual-specifier', '-I', str(ROOT / '.cache/xnu-work/osfmk')])
-if component in ('NativeVirtioBlock', 'NativeRamBlock', 'NativeUfs', 'DadaUfs'):
+if component in ('NativeVirtioBlock', 'NativeRamBlock', 'NativeUfs', 'DadaUfs2'):
     command += ['-I', str(ROOT / 'build/storage-abi/include')]
     if args.verified_root:
         command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-DNATIVE_VERIFIED_BLOCK=1']
@@ -89,7 +89,7 @@ if component in ('NativeVirtioBlock', 'NativeRamBlock', 'NativeUfs', 'DadaUfs'):
         command += ['-DNATIVE_VERIFIED_BLOCK_INJECT_FAULT=1']
     if args.verified_root_bundle:
         command += ['-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1']
-if component in ('NativeUfs', 'DadaUfs'):
+if component in ('NativeUfs', 'DadaUfs2'):
     command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-I', str(ROOT / 'drivers/VirtioMmioBlock'),
                 '-mgeneral-regs-only']
 (out / 'compile-command.json').write_text(json.dumps(command, indent=2) + '\n')

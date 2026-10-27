@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the dada RAM Data transport (NativeRamBlock) reusing DadaUfs's audited storage bindings."""
+"""Build the dada RAM Data transport (NativeRamBlock) reusing DadaUfs2's audited storage bindings."""
 import json
 import os
 from pathlib import Path
@@ -9,8 +9,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/ram-block'
 OUT.mkdir(parents=True, exist_ok=True)
-args = json.loads((ROOT / 'build/dada-ufs/compile-command.json').read_text())
-source_entry = next(a for a in args if a.endswith('/drivers/DadaUfs/DadaUfs.cpp'))
+args = json.loads((ROOT / 'build/dada2-ufs/compile-command.json').read_text())
+source_entry = next(a for a in args if a.endswith('/drivers/DadaUfs2/DadaUfs2.cpp'))
 driver_dir = str(Path(source_entry).parent)
 ram_dir = str(Path(driver_dir).parent / 'RamBlock')
 source = Path(ram_dir) / 'NativeRamBlock.cpp'
@@ -45,6 +45,6 @@ if result.returncode:
     raise SystemExit(result.stderr[-2000:])
 archive = OUT / 'libRamBlock.a'
 archive.unlink(missing_ok=True)
-# The IOBlockStorageDevice aliases live in DadaUfs's original-bindings.o; a second copy would duplicate them.
+# The IOBlockStorageDevice aliases live in DadaUfs2's original-bindings.o; a second copy would duplicate them.
 subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(stub_obj)], check=True)
 print(f'dada ram block: {archive.relative_to(ROOT)} ({archive.stat().st_size} bytes)')

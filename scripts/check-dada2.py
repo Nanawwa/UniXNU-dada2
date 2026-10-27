@@ -12,7 +12,7 @@ Hard errors (the build stops):
   - the board DT that the boot image needs is missing
   - this repository's [firmware] config/dsc points somewhere else
   - scripts/tests/check-kernel-archives.py fails: the defconfig, the [kernel] archives and the archive
-    builders disagree, or DadaUfs would be built with verified block mode and no policy bundle
+    builders disagree, or DadaUfs2 would be built with verified block mode and no policy bundle
 
 The kernel step needs macOS, so the last check keeps the parts that can be verified anywhere coupled: it
 runs the real builder against a synthetic compile record, so it needs no Xcode.
@@ -141,7 +141,7 @@ def main():
         else:
             errors.append('no dada device tree: Resources/DTBs/dada.dtb and Platforms/Xiaomi/dadaPkg/FdtBlob/*.dtb are both missing')
 
-    # DadaUfs hardcodes the controller's compatible names and the SM8750 GCC offsets. Check both
+    # DadaUfs2 hardcodes the controller's compatible names and the SM8750 GCC offsets. Check both
     # against the tree the kernel will actually boot from: a device tree that renames the controller
     # or a header that keeps the SM8550 offsets makes the driver silently not attach.
     # Runs after `device` is resolved below, because the checker lives in the device repository.
@@ -178,19 +178,19 @@ def main():
         # The OS profile owns [ipsw] and [payload] trust_cache_sha256 in format 2; the resolved
         # configuration carries them, so this preflight only checks the board's own values.
 
-        ufs_facts = device / 'drivers/DadaUfs/tests/check_sm8750_facts.py'
+        ufs_facts = device / 'drivers/DadaUfs2/tests/check_sm8750_facts.py'
         if dtb.is_file() and ufs_facts.is_file():
             result = subprocess.run([sys.executable, str(ufs_facts), '--dtb', str(dtb)],
                                     capture_output=True, text=True)
             lines = (result.stdout or result.stderr).strip().splitlines()
             if result.returncode:
                 detail = next((line for line in lines if line.startswith('FAIL')), 'no detail')
-                errors.append(f'DadaUfs SM8750 facts: {detail}')
+                errors.append(f'DadaUfs2 SM8750 facts: {detail}')
             else:
                 checks = [line for line in lines if line.startswith('PASS')]
-                print(f'preflight: DadaUfs: {len(checks)} fact checks against {dtb.name}')
+                print(f'preflight: DadaUfs2: {len(checks)} fact checks against {dtb.name}')
         elif dtb.is_file():
-            warnings.append('drivers/DadaUfs/tests/check_sm8750_facts.py is missing; '
+            warnings.append('drivers/DadaUfs2/tests/check_sm8750_facts.py is missing; '
                             'the UFS compatible and GCC offsets are unchecked')
 
         # The kernel step needs macOS, so check here that its config, builders and products agree. In the
